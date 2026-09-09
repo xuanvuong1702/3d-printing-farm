@@ -146,6 +146,22 @@ def get_status(
         filename=filename,
     )
 
+def gcode_script(
+    host: str,
+    script: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    resp = _request(
+        "POST",
+        host,
+        "/printer/gcode/script",
+        port=port,
+        api_key=api_key,
+        params={"script": script},
+    )
+    return resp.json()
+
 def upload_and_print(
     host: str,
     filename: str,

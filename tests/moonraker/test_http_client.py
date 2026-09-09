@@ -178,6 +178,32 @@ def test_get_status_filename_none_when_idle():
     assert result.filename is None
 
 @respx.mock
+def test_gcode_script_sends_script_as_query_param():
+    route = respx.post(f"{BASE_URL}/printer/gcode/script").respond(
+        200, json={"result": "ok"}
+    )
+
+    result = hc.gcode_script(HOST, "G28", port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+    assert sent_request.url.params.get("script") == "G28"
+
+    assert sent_request.content == b""
+    assert result == {"result": "ok"}
+
+@respx.mock
+def test_gcode_script_passes_through_arbitrary_script_text():
+    route = respx.post(f"{BASE_URL}/printer/gcode/script").respond(
+        200, json={"result": "ok"}
+    )
+
+    hc.gcode_script(HOST, "M117 Hello World", port=PORT)
+
+    sent_request = route.calls.last.request
+    assert sent_request.url.params.get("script") == "M117 Hello World"
+
+@respx.mock
 def test_upload_and_print_sends_print_as_form_field_not_query_param():
     route = respx.post(f"{BASE_URL}/server/files/upload").respond(
         200, json={"result": {"item": {"path": "gcodes/benchy.gcode"}}}
