@@ -16,7 +16,7 @@ Quyết định kiến trúc (chốt tại E0-5/C1, xem docs/Story_E0-5.md):
     `virtual_sdcard`/`webhooks`) — chunk C3 (done).
   - `POST /server/files/upload`, `POST /printer/gcode/script`,
     `POST /printer/print/cancel`, `POST /printer/print/pause`,
-    `POST /printer/print/resume` — chunk C4.
+    `POST /printer/print/resume` — chunk C4 (done).
 
 Quyết định chunk C2 (xem `docs/Story_E0-5.md` mục "C2"):
 - `get_server_info`/`get_printer_info` trong `http_client.py` chỉ trả
@@ -52,11 +52,41 @@ Quyết định chunk C3 (xem `docs/Story_E0-5.md` mục "C3"):
   `webhooks_state`) — không thêm field mới, không map sang canonical
   D-013 (việc map là trách nhiệm của `http_client.py::get_status`, đọc
   y hệt máy thật).
+
+Quyết định chunk C4 (xem `docs/Story_E0-5.md` mục "C4"):
+- **Không mô phỏng progress/print_duration tự tăng theo thời gian
+  thực** (không dùng background thread/task). Cả 5 endpoint chỉ
+  **mutate `state` một lần khi nhận request**, set giá trị tĩnh hợp lý
+  (vd. upload → `progress = 0.0`). AC gốc chỉ yêu cầu "dev/test được
+  toàn bộ luồng API mà không phụ thuộc máy in vật lý" — không yêu cầu
+  mô phỏng tốc độ in thật. Khi C5 cần quan sát "progress đang tăng",
+  test sẽ tự mutate `state.virtual_sdcard_progress`/
+  `state.print_stats_print_duration` trực tiếp qua Python object giữa
+  các bước (cùng cách đã dùng để kiểm chứng C3 — chạy simulator qua
+  `uvicorn.Server` cùng tiến trình để có quyền truy cập instance
+  `state`), thay vì chờ simulator tự tăng. Nếu sau này phát sinh nhu
+  cầu thật cần mô phỏng tốc độ in (vd. demo trực quan), đó là 1 chunk
+  mở rộng riêng — không mặc định làm ở đây.
+- **Không validate thứ tự chuyển trạng thái** — mỗi endpoint set thẳng
+  `print_stats_state` theo đúng lệnh nhận được, bất kể trạng thái hiện
+  tại (vd. `pause` khi đang `standby` vẫn set `paused`, không trả lỗi).
+  Đơn giản hoá hợp lý cho mục đích dev/test luồng API; nghiệp vụ thật
+  (vd. chặn pause khi không có job đang chạy) thuộc tầng service, không
+  phải trách nhiệm của simulator giả lập hành vi Moonraker/Klipper.
+- **`POST /server/files/upload` giữ đúng "bug thật" đã ghi trong
+  checklist Moonraker** (Decisions.md, dòng 236): chỉ bắt đầu in
+  (`print_stats_state = "printing"`) khi field `print` được gửi đúng
+  dạng **multipart form field** giá trị `"true"` — nếu thiếu hoặc gửi
+  sai vị trí (vd. query param), simulator **âm thầm bỏ qua**, vẫn trả
+  `200` nhưng không đổi state, y hệt hành vi Moonraker thật đã ghi
+  nhận. Việc này giúp C5 (test tích hợp) có thể viết 1 test case xác
+  nhận `http_client.py::upload_and_print` (đã code đúng, gửi `print`
+  qua `data=` chứ không phải `params=`) không dính bug đó.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 
 from tools.moonraker_simulator.state import SimulatorState
 
@@ -159,3 +189,85 @@ def printer_objects_query() -> dict:
             }
         }
     }
+
+@app.post("/server/files/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    print_flag: str | None = Form(None, alias="print"),
+) -> dict:
+    """
+    POST /server/files/upload — khớp `http_client.py::upload_and_print`
+    (dòng 232-259): multipart form-data, field `file` + field `print`.
+
+    Giữ đúng "bug thật" đã ghi trong checklist Moonraker (Decisions.md,
+    dòng 236, quyết định C4): chỉ bắt đầu in khi `print_flag == "true"`
+    **và** nó thật sự đến từ multipart form field (tham số `print_flag`
+    dùng `Form(...)`, không phải `Query(...)`, nên nếu client gửi
+    `print` qua query string thay vì form field — như bug đã xảy ra ở
+    dự án tham khảo — FastAPI sẽ KHÔNG bind được giá trị vào đây,
+    `print_flag` vẫn là `None`, và simulator âm thầm bỏ qua đúng như
+    Moonraker thật.
+    """
+    content = await file.read()
+    if print_flag == "true":
+        state.print_stats_state = "printing"
+        state.print_stats_filename = file.filename
+        state.print_stats_print_duration = 0.0
+        state.virtual_sdcard_progress = 0.0
+    return {
+        "result": {
+            "item": {
+                "path": f"gcodes/{file.filename}",
+                "root": "gcodes",
+                "size": len(content),
+            },
+            "print_started": print_flag == "true",
+        }
+    }
+
+@app.post("/printer/gcode/script")
+def gcode_script(script: str = "") -> dict:
+    """
+    POST /printer/gcode/script?script=... — khớp
+    `http_client.py::gcode_script` (dòng 200-229), tham số `script`
+    truyền qua QUERY STRING (khác `upload_and_print` ở trên).
+
+    Quyết định C4: chạy "thành công" luôn, KHÔNG đổi state — đã xác
+    nhận không có script cụ thể nào trong phạm vi 8 hàm client hiện có
+    (E0-3 đã đóng) cần simulator xử lý riêng (vd. không có call site
+    nào dùng `gcode_script` để tự cancel/pause qua gcode thay vì gọi
+    thẳng endpoint tương ứng).
+    """
+    return {"result": "ok"}
+
+@app.post("/printer/print/cancel")
+def cancel_print() -> dict:
+    """POST /printer/print/cancel — khớp `http_client.py::cancel_job`.
+
+    Set thẳng `print_stats_state = "cancelled"` (map sang canonical
+    `STOPPED` ở tầng `http_client.py` qua `_PRINT_STATS_STATE_MAP`,
+    simulator chỉ set giá trị native) — không validate trạng thái hiện
+    tại trước đó (quyết định C4, xem docstring module).
+    """
+    state.print_stats_state = "cancelled"
+    return {"result": "ok"}
+
+@app.post("/printer/print/pause")
+def pause_print() -> dict:
+    """POST /printer/print/pause — khớp `http_client.py::pause_job`.
+
+    Set thẳng `print_stats_state = "paused"`, không validate (quyết
+    định C4).
+    """
+    state.print_stats_state = "paused"
+    return {"result": "ok"}
+
+@app.post("/printer/print/resume")
+def resume_print() -> dict:
+    """POST /printer/print/resume — khớp `http_client.py::resume_job`.
+
+    Set thẳng `print_stats_state = "printing"`, không validate (quyết
+    định C4).
+    """
+    state.print_stats_state = "printing"
+    return {"result": "ok"}
