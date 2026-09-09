@@ -1,4 +1,0 @@
--r requirements.txt
-pytest>=8.0
-respx>=0.21
-pyflakes>=3.0
