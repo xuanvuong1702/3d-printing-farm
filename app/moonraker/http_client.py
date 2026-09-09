@@ -12,13 +12,12 @@ Quyết định áp dụng:
 - CLAUDE.md nguyên tắc #4: gặp trạng thái native lạ -> map về "UNKNOWN",
   không tự bịa giá trị mới.
 
-Phạm vi chunk C1 (E0-3): server_info/printer_info, đọc trạng thái máy,
-tính progress/timeRemaining, lấy tên file đang in, upload G-code + in
-ngay, cancel job, checkIfPrinting. KHÔNG bao gồm: kênh WebSocket (D-002
-phần 2 / Q-001 - đã chốt dùng `moonraker-api`, nhưng việc tích hợp thư
-viện đó thuộc phạm vi story khác, vd. E2-1); KHÔNG bao gồm pause/resume
-(endpoint chưa được xác nhận qua checklist tham chiếu - cần tra cứu thêm,
-xem TODO cuối file).
+Phạm vi E0-3 (gộp qua các chunk C1/C1b/gap-fill tại C5): server_info/
+printer_info, đọc trạng thái máy, tính progress/timeRemaining, lấy tên
+file đang in, chạy gcode tuỳ ý (`gcode_script`), upload G-code + in ngay,
+cancel/pause/resume job, checkIfPrinting. KHÔNG bao gồm: kênh WebSocket
+(D-002 phần 2 / Q-001 - đã chốt dùng `moonraker-api`, nhưng việc tích hợp
+thư viện đó thuộc phạm vi story khác, vd. E2-1).
 """
 
 from __future__ import annotations
@@ -181,6 +180,37 @@ def get_status(
         time_remaining_seconds=time_remaining_seconds,
         filename=filename,
     )
+
+def gcode_script(
+    host: str,
+    script: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    """
+    POST /printer/gcode/script?script=<script> - chạy một dòng/script gcode
+    tuỳ ý (AC gốc của E0-3 liệt kê `gcode_script` là 1 trong các lệnh rời
+    rạc bắt buộc, tách biệt với cancel/pause/resume/upload).
+
+    Xác nhận nguồn (chunk C5/E0-3, KHÔNG nằm trong "Phụ lục: Checklist kỹ
+    thuật Moonraker" tham chiếu từ print-farm-manager - dự án đó không gọi
+    endpoint này): tài liệu Moonraker chính thức
+    (moonraker.readthedocs.io/en/latest/web_api/, mục "GCode APIs") - ví
+    dụ minh hoạ chính thức là `POST /printer/gcode/script?script=G28`,
+    tham số `script` truyền qua QUERY STRING (khác với `upload_and_print`,
+    nơi field `print` bắt buộc là multipart form field - hai endpoint có
+    quy ước tham số khác nhau, không suy diễn cùng 1 kiểu cho cả hai).
+    Trả lời thành công khi gcode đã chạy xong (không phải chỉ xếp hàng).
+    """
+    resp = _request(
+        "POST",
+        host,
+        "/printer/gcode/script",
+        port=port,
+        api_key=api_key,
+        params={"script": script},
+    )
+    return resp.json()
 
 def upload_and_print(
     host: str,
