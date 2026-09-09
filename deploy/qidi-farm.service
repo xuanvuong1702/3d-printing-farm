@@ -1,0 +1,17 @@
+[Unit]
+Description=QIDI Print Farm Orchestration Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qidifarm
+Group=qidifarm
+WorkingDirectory=/opt/qidi-farm
+Environment=PATH=/opt/qidi-farm/venv/bin
+ExecStart=/opt/qidi-farm/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
