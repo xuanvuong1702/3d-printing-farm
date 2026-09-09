@@ -54,3 +54,23 @@ def printer_info() -> dict:
             "config_file": _SIMULATED_KLIPPER_CONFIG_FILE,
         }
     }
+
+@app.get("/printer/objects/query")
+def printer_objects_query() -> dict:
+    return {
+        "result": {
+            "status": {
+                "print_stats": {
+                    "state": state.print_stats_state,
+                    "filename": state.print_stats_filename,
+                    "print_duration": state.print_stats_print_duration,
+                },
+                "virtual_sdcard": {
+                    "progress": state.virtual_sdcard_progress,
+                },
+                "webhooks": {
+                    "state": state.webhooks_state,
+                },
+            }
+        }
+    }
