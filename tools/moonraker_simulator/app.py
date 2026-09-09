@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 
 from tools.moonraker_simulator.state import SimulatorState
 
@@ -74,3 +74,44 @@ def printer_objects_query() -> dict:
             }
         }
     }
+
+@app.post("/server/files/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    print_flag: str | None = Form(None, alias="print"),
+) -> dict:
+    content = await file.read()
+    if print_flag == "true":
+        state.print_stats_state = "printing"
+        state.print_stats_filename = file.filename
+        state.print_stats_print_duration = 0.0
+        state.virtual_sdcard_progress = 0.0
+    return {
+        "result": {
+            "item": {
+                "path": f"gcodes/{file.filename}",
+                "root": "gcodes",
+                "size": len(content),
+            },
+            "print_started": print_flag == "true",
+        }
+    }
+
+@app.post("/printer/gcode/script")
+def gcode_script(script: str = "") -> dict:
+    return {"result": "ok"}
+
+@app.post("/printer/print/cancel")
+def cancel_print() -> dict:
+    state.print_stats_state = "cancelled"
+    return {"result": "ok"}
+
+@app.post("/printer/print/pause")
+def pause_print() -> dict:
+    state.print_stats_state = "paused"
+    return {"result": "ok"}
+
+@app.post("/printer/print/resume")
+def resume_print() -> dict:
+    state.print_stats_state = "printing"
+    return {"result": "ok"}
