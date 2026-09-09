@@ -13,7 +13,7 @@ Quyết định kiến trúc (chốt tại E0-5/C1, xem docs/Story_E0-5.md):
   `app/moonraker/http_client.py` (D-002 phần (1)):
   - `GET /server/info`, `GET /printer/info` — chunk C2 (done).
   - `GET /printer/objects/query` (params `print_stats`/
-    `virtual_sdcard`/`webhooks`) — chunk C3.
+    `virtual_sdcard`/`webhooks`) — chunk C3 (done).
   - `POST /server/files/upload`, `POST /printer/gcode/script`,
     `POST /printer/print/cancel`, `POST /printer/print/pause`,
     `POST /printer/print/resume` — chunk C4.
@@ -36,6 +36,22 @@ Quyết định chunk C2 (xem `docs/Story_E0-5.md` mục "C2"):
   `GET /printer/objects/query` (C3) sẽ trả, để nếu sau này có chunk nào
   đổi `webhooks_state` (mô phỏng Klippy lỗi) thì cả 3 endpoint đọc trạng
   thái Klippy đều nhất quán, không lệch nhau.
+
+Quyết định chunk C3 (xem `docs/Story_E0-5.md` mục "C3"):
+- `GET /printer/objects/query` **luôn trả cả 3 object** `print_stats`/
+  `virtual_sdcard`/`webhooks`, KHÔNG lọc theo query params thật sự gửi
+  lên — đơn giản hoá hợp lý vì `http_client.py::get_status` (dòng
+  148-159) luôn truyền đủ cả 3 key rỗng trong mọi lần gọi, không có
+  call site nào trong phạm vi story hiện tại gọi thiếu 1 trong 3 key.
+  Nếu sau này phát sinh call site khác chỉ cần 1-2 object, đây sẽ là 1
+  chunk mở rộng route (thêm lọc theo `request.query_params.keys()`),
+  không phải sửa lại quyết định này.
+- Đọc trực tiếp 3 field native đã có sẵn trong `SimulatorState` từ C1
+  (`print_stats_state`, `print_stats_filename`,
+  `print_stats_print_duration`, `virtual_sdcard_progress`,
+  `webhooks_state`) — không thêm field mới, không map sang canonical
+  D-013 (việc map là trách nhiệm của `http_client.py::get_status`, đọc
+  y hệt máy thật).
 """
 
 from __future__ import annotations
@@ -108,5 +124,38 @@ def printer_info() -> dict:
             "python_path": "/home/pi/klippy-env/bin/python",
             "log_file": "/home/pi/printer_data/logs/klippy.log",
             "config_file": _SIMULATED_KLIPPER_CONFIG_FILE,
+        }
+    }
+
+@app.get("/printer/objects/query")
+def printer_objects_query() -> dict:
+    """
+    GET /printer/objects/query — khớp `http_client.py::get_status`
+    (dòng 136-197): đọc `resp.json()["result"]["status"]`, rồi lấy
+    `status.get("print_stats", {})`, `status.get("virtual_sdcard", {})`,
+    `status.get("webhooks", {}).get("state")`.
+
+    Luôn trả cả 3 object bất kể query params thật sự gửi lên (quyết
+    định C3, xem docstring module) — `http_client.py` luôn truyền đủ cả
+    3 key rỗng nên không cần lọc ở simulator.
+
+    Đọc trực tiếp field native hiện có trong `SimulatorState` (không map
+    canonical D-013 — đúng quyết định #2 của C1).
+    """
+    return {
+        "result": {
+            "status": {
+                "print_stats": {
+                    "state": state.print_stats_state,
+                    "filename": state.print_stats_filename,
+                    "print_duration": state.print_stats_print_duration,
+                },
+                "virtual_sdcard": {
+                    "progress": state.virtual_sdcard_progress,
+                },
+                "webhooks": {
+                    "state": state.webhooks_state,
+                },
+            }
         }
     }
