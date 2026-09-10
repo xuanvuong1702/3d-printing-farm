@@ -23,6 +23,21 @@ Quyết định áp dụng:
   trị), và `job_history.status` (3 giá trị - tập con của `jobs.status`,
   chỉ ghi khi job đã kết thúc).
 
+Phạm vi E1-4/C1 (chunk này): thêm 2 cột mới vào `CREATE_PRINTERS_SQL`
+phục vụ heartbeat scheduler nền (xem `docs/State_E1-4_v2.md` mục "Quyết
+định phạm vi chốt tại chunk C0", Quyết định 4 - không phải `D-00X` mới,
+là thiết kế schema cục bộ của story E1-4):
+- `consecutive_heartbeat_failures`: đếm số lần heartbeat lỗi liên tiếp
+  cho 1 máy, dùng để tính backoff tăng dần (xem
+  `app/heartbeat/service.py`). Không có `CHECK` - không phải enum/
+  canonical status, chỉ là bộ đếm.
+- `next_heartbeat_at`: thời điểm (ISO-8601 UTC, cùng định dạng
+  `created_at`/`updated_at`) tới lượt heartbeat kế tiếp cho máy đó.
+  Nullable - `NULL` nghĩa là "chưa từng heartbeat, đến lượt ngay".
+  Không có default ở tầng SQL (khác `created_at`/`updated_at`) vì giá
+  trị `NULL` mặc định đã đúng ý nghĩa "đến lượt ngay", không cần tính
+  bằng `strftime`.
+
 Quy ước code (CLAUDE.md, điền lần đầu ở E0-4/C1):
 - boolean lưu `INTEGER` với `CHECK (col IN (0,1))` (`is_held`).
 - timestamp lưu `TEXT` ISO-8601 UTC, default tính ở tầng SQL bằng
@@ -66,6 +81,8 @@ CREATE TABLE IF NOT EXISTS printers (
         )),
     is_held INTEGER NOT NULL DEFAULT 0
         CHECK (is_held IN (0, 1)),
+    consecutive_heartbeat_failures INTEGER NOT NULL DEFAULT 0,
+    next_heartbeat_at TEXT,
     created_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL
