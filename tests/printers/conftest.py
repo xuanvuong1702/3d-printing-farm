@@ -11,10 +11,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+import app.heartbeat.scheduler as heartbeat_scheduler_module
 import app.main as main_module
 import app.printers.router as printers_router_module
 import tools.moonraker_simulator.app as simulator_app
 from app.db.migrate import run_migrations
+from app.heartbeat.service import run_heartbeat_cycle as _real_run_heartbeat_cycle
 from app.moonraker.http_client import DEFAULT_MOONRAKER_PORT
 from app.printers.service import register_printer as _real_register_printer
 from tools.moonraker_simulator.state import SimulatorState
@@ -98,6 +100,15 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
     monkeypatch.setattr(
         printers_router_module, "register_printer", _register_printer_with_tmp_db
+    )
+
+    def _run_heartbeat_cycle_with_tmp_db() -> None:
+        _real_run_heartbeat_cycle(db_path=db_path)
+
+    monkeypatch.setattr(
+        heartbeat_scheduler_module,
+        "run_heartbeat_cycle",
+        _run_heartbeat_cycle_with_tmp_db,
     )
 
     with TestClient(main_module.app) as test_client:
