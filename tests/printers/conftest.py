@@ -21,7 +21,13 @@ thêm ở E1-2/C2):
   `register_printer` được giữ nguyên cho production, chỉ override ở
   tầng test qua `monkeypatch.setattr` trên module `router`, đúng cách
   C1 đã thiết kế sẵn tham số `db_path` cho mục đích test injection —
-  xem `docs/State_E1-1_v3.md` mục "Chunk plan" C2).
+  xem `docs/State_E1-1_v3.md` mục "Chunk plan" C2). E1-4/C3, MỚI: cùng
+  kỹ thuật monkeypatch áp dụng cho
+  `app.heartbeat.scheduler.run_heartbeat_cycle`, trỏ về CÙNG 1
+  `db_path` tạm — tránh heartbeat scheduler nền (khởi động qua
+  `lifespan` của `app.main.app` từ C3) chạm `DEFAULT_DB_PATH` thật
+  trong lúc test (xem docstring fixture `client` bên dưới cho lý do
+  đầy đủ).
 - `simulator_factory` (E1-2/C2, MỚI): factory fixture trả về 1 hàm
   `start(host=...) -> SimulatorHandle` (`SimulatorHandle` có `.port` và
   `.stop()`), cho phép khởi động NHIỀU simulator trên các host khác
@@ -53,10 +59,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+import app.heartbeat.scheduler as heartbeat_scheduler_module
 import app.main as main_module
 import app.printers.router as printers_router_module
 import tools.moonraker_simulator.app as simulator_app
 from app.db.migrate import run_migrations
+from app.heartbeat.service import run_heartbeat_cycle as _real_run_heartbeat_cycle
 from app.moonraker.http_client import DEFAULT_MOONRAKER_PORT
 from app.printers.service import register_printer as _real_register_printer
 from tools.moonraker_simulator.state import SimulatorState
@@ -157,6 +165,22 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
     tên `register_printer` được bind vào lúc `from ... import
     register_printer`) — không sửa `app/printers/router.py` hay
     `service.py`.
+
+    E1-4/C3 (MỚI): `app.main.app` giờ có `lifespan` khởi động heartbeat
+    scheduler nền (`app/heartbeat/scheduler.py`) — nếu không override,
+    scheduler chạy `run_heartbeat_cycle` nhắm vào `DEFAULT_DB_PATH`
+    thật (`print_farm.db`, đường dẫn tương đối) ngay trong lúc test,
+    gây 2 vấn đề: (1) tạo file `print_farm.db` rác trong working
+    directory (side effect ngoài ý muốn của việc chạy test), (2) lỗi
+    `sqlite3.OperationalError: no such table` (DB đó chưa từng chạy
+    migration) bị `scheduler._heartbeat_loop` tự nuốt (log, không
+    raise — đúng thiết kế "1 lỗi không mong đợi không giết task nền"),
+    nên KHÔNG làm test nào fail, nhưng vẫn là hành vi bẩn cần dọn. Cùng
+    kỹ thuật override đã dùng cho `register_printer`: monkeypatch tên
+    `run_heartbeat_cycle` tại nơi `app.heartbeat.scheduler` đã bind
+    (`from app.heartbeat.service import run_heartbeat_cycle`) để trỏ
+    về cùng `db_path` tạm của test này — không sửa
+    `app/heartbeat/scheduler.py`/`service.py`.
     """
     db_path = str(tmp_path / "test_printers.db")
     run_migrations(db_path)
@@ -166,6 +190,15 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
     monkeypatch.setattr(
         printers_router_module, "register_printer", _register_printer_with_tmp_db
+    )
+
+    def _run_heartbeat_cycle_with_tmp_db() -> None:
+        _real_run_heartbeat_cycle(db_path=db_path)
+
+    monkeypatch.setattr(
+        heartbeat_scheduler_module,
+        "run_heartbeat_cycle",
+        _run_heartbeat_cycle_with_tmp_db,
     )
 
     with TestClient(main_module.app) as test_client:
