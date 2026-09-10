@@ -1,12 +1,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+import aiohttp
 from moonraker_api import MoonrakerClient, MoonrakerListener
+from moonraker_api.const import WEBSOCKET_STATE_CONNECTED, WEBSOCKET_STATE_STOPPED
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.moonraker.http_client import (
@@ -104,17 +107,25 @@ class PrinterWebsocketConnection(MoonrakerListener):
         port: int,
         api_key: Optional[str],
         store: RealtimeStateStore,
+        session: Optional[aiohttp.ClientSession] = None,
     ) -> None:
         self.printer_id = printer_id
         self.store = store
         self._raw_status: Dict[str, Dict[str, Any]] = {}
-        self._client = MoonrakerClient(listener=self, host=host, port=port, api_key=api_key)
+        self._connected_once = False
+
+        self.disconnected = asyncio.Event()
+
+        self._client = MoonrakerClient(
+            listener=self, host=host, port=port, api_key=api_key, session=session
+        )
 
     @property
     def is_connected(self) -> bool:
         return self._client.is_connected
 
     async def connect(self) -> bool:
+        self.disconnected.clear()
         connected = await self._client.connect()
         if not connected:
             return False
@@ -141,6 +152,11 @@ class PrinterWebsocketConnection(MoonrakerListener):
 
     async def state_changed(self, state: str) -> None:
         _LOGGER.debug("Printer %s websocket state -> %s", self.printer_id, state)
+        if state == WEBSOCKET_STATE_CONNECTED:
+            self._connected_once = True
+        elif state == WEBSOCKET_STATE_STOPPED and self._connected_once:
+            self._connected_once = False
+            self.disconnected.set()
 
     async def on_exception(self, exception: Any) -> None:
         _LOGGER.warning(
