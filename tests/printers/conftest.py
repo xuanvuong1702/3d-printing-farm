@@ -4,7 +4,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Callable, Iterator, List
 
 import pytest
 import uvicorn
@@ -101,3 +102,54 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
     with TestClient(main_module.app) as test_client:
         yield test_client
+
+@dataclass
+class SimulatorHandle:
+
+    host: str
+    port: int
+    stop: Callable[[], None]
+
+@pytest.fixture()
+def simulator_factory() -> Iterator[Callable[..., SimulatorHandle]]:
+    handles: List[SimulatorHandle] = []
+
+    def _start(host: str = SIMULATOR_HOST) -> SimulatorHandle:
+        simulator_app.state = SimulatorState()
+
+        config = uvicorn.Config(
+            simulator_app.app, host=host, port=0, log_level="warning"
+        )
+        server = uvicorn.Server(config)
+        thread = _ServerThread(server)
+        thread.start()
+
+        deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+        while not server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"Simulator không khởi động kịp trong "
+                    f"{_STARTUP_TIMEOUT_SECONDS}s"
+                )
+            time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
+
+        port = server.servers[0].sockets[0].getsockname()[1]
+        stopped = False
+
+        def _stop() -> None:
+            nonlocal stopped
+            if stopped:
+                return
+            stopped = True
+            server.should_exit = True
+            thread.join(timeout=_STARTUP_TIMEOUT_SECONDS)
+
+        handle = SimulatorHandle(host=host, port=port, stop=_stop)
+        handles.append(handle)
+        return handle
+
+    try:
+        yield _start
+    finally:
+        for handle in handles:
+            handle.stop()
