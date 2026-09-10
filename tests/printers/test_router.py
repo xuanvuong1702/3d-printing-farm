@@ -45,16 +45,54 @@ trỏ về đúng DB tạm của chính test đó, qua hàm `_bind_list_printers
 bên dưới (không sửa fixture `client` trong `conftest.py`, chỉ dùng
 `monkeypatch`/`tmp_path` - 2 fixture built-in của pytest - ngay trong
 thân test).
+
+AC gốc E1-3 ("CRUD đầy đủ, không xoá được máy đang có job active",
+`docs/Backlog.md`) — xem `docs/State_E1-3_v2.md`/`docs/Story_E1-3.md`
+cho rationale phạm vi đầy đủ, không lặp lại ở đây:
+- `PATCH /printers/{printer_id}` đổi `name`/`model`/`api_key` (kể cả
+  `null` tường minh) -> `test_patch_printer_updates_name`,
+  `test_patch_printer_updates_model_and_api_key_including_explicit_null`.
+- Body rỗng là no-op hợp lệ, `updated_at` không đổi ->
+  `test_patch_printer_empty_body_is_noop_and_keeps_updated_at`.
+- `printer_id` không tồn tại -> `404` ->
+  `test_patch_printer_not_found_returns_404`.
+- `ip`/`moonraker_port` không sửa được qua PATCH (field lạ bị Pydantic
+  bỏ qua) -> `test_patch_printer_ignores_ip_field`.
+- `DELETE /printers/{printer_id}` thành công (hard delete, `204`) ->
+  `test_delete_printer_success_returns_204_and_removes_row`.
+- `printer_id` không tồn tại -> `404` ->
+  `test_delete_printer_not_found_returns_404`.
+- Chặn xoá khi `status` đang `PRINTING`/`PAUSED` ("có job active",
+  D-013/D-010, `409`, không xoá) ->
+  `test_delete_printer_blocked_when_status_is_printing`,
+  `test_delete_printer_blocked_when_status_is_paused`.
+- Chặn xoá khi còn dòng `jobs` tham chiếu `printer_id` (lớp bảo vệ bổ
+  sung từ `PRAGMA foreign_keys = ON`, `409`, khác thông báo với case
+  "có job active") -> `test_delete_printer_blocked_by_related_job_row`.
+
+`PATCH`/`DELETE /printers/{printer_id}` cũng không đi qua monkeypatch
+có sẵn của fixture `client` (chỉ override `register_printer`) — mỗi
+test PATCH/DELETE tự `monkeypatch.setattr` thêm
+`printers_router_module.update_printer`/`delete_printer` để trỏ về
+đúng DB tạm của chính test đó, qua hàm `_bind_update_and_delete_printer`
+bên dưới (cùng kỹ thuật với `_bind_list_printers` của E1-2/C2 — không
+sửa fixture `client` trong `conftest.py`). Case "có job active"/"còn
+dòng `jobs` liên quan" UPDATE/INSERT trực tiếp qua
+`sqlite3.connect(db_path)` ngay trong thân test (chưa có cách set qua
+API công khai, Epic 4 Job Queue chưa triển khai).
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from fastapi.testclient import TestClient
 
 import app.printers.router as printers_router_module
+from app.printers.service import delete_printer as _real_delete_printer
 from app.printers.service import list_printers as _real_list_printers
+from app.printers.service import update_printer as _real_update_printer
 
 def _count_printers(db_path: str) -> int:
     connection = sqlite3.connect(db_path)
@@ -85,6 +123,26 @@ def _bind_list_printers(monkeypatch, tmp_path) -> str:
         printers_router_module,
         "list_printers",
         lambda: _real_list_printers(db_path=db_path),
+    )
+    return db_path
+
+def _bind_update_and_delete_printer(monkeypatch, tmp_path) -> str:
+    """Trỏ `app.printers.router.update_printer`/`delete_printer`
+    (E1-3) về đúng DB tạm (`tmp_path / "test_printers.db"`) - cùng kỹ
+    thuật với `_bind_list_printers` (E1-2/C2), không sửa
+    `conftest.py`/`router.py`/`service.py`."""
+    db_path = str(tmp_path / "test_printers.db")
+    monkeypatch.setattr(
+        printers_router_module,
+        "update_printer",
+        lambda printer_id, request: _real_update_printer(
+            printer_id, request, db_path=db_path
+        ),
+    )
+    monkeypatch.setattr(
+        printers_router_module,
+        "delete_printer",
+        lambda printer_id: _real_delete_printer(printer_id, db_path=db_path),
     )
     return db_path
 
@@ -317,3 +375,201 @@ def test_list_printers_mixed_online_and_offline_printers(
     db_status_by_ip = _printer_status_by_ip(db_path)
     assert db_status_by_ip[online_ip] == "IDLE"
     assert db_status_by_ip[offline_ip] == "OFFLINE"
+
+def _register_one_printer(client: TestClient, simulator: int, name: str = "Printer E1-3") -> dict:
+    """Đăng ký 1 máy qua `POST /printers` (dùng chung cho các test
+    PATCH/DELETE bên dưới) - trả về body response đã đăng ký thành
+    công (`id` cần cho các request PATCH/DELETE tiếp theo)."""
+    response = client.post(
+        "/printers",
+        json={"name": name, "ip": "127.0.0.1", "moonraker_port": simulator},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+def test_patch_printer_updates_name(client: TestClient, simulator: int, tmp_path, monkeypatch) -> None:
+    """AC E1-3: PATCH sửa `name` -> 200, đúng dữ liệu mới, `updated_at`
+    thay đổi so với lúc đăng ký."""
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    time.sleep(1.1)
+
+    response = client.patch(f"/printers/{registered['id']}", json={"name": "Printer Renamed"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Printer Renamed"
+    assert body["updated_at"] != registered["updated_at"]
+
+    assert body["ip"] == registered["ip"]
+
+def test_patch_printer_updates_model_and_api_key_including_explicit_null(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """AC E1-3: PATCH sửa `model`/`api_key`, kể cả truyền `null` tường
+    minh để xoá giá trị hiện có về `NULL` (cả 2 cột đều nullable ở
+    DDL) - phân biệt được với "không truyền" nhờ `exclude_unset`."""
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    response = client.post(
+        "/printers",
+        json={
+            "name": "Printer With Model",
+            "ip": "127.0.0.1",
+            "moonraker_port": simulator,
+            "model": "QIDI Plus4",
+            "api_key": "secret-key",
+        },
+    )
+    assert response.status_code == 201
+    printer_id = response.json()["id"]
+
+    patch_response = client.patch(
+        f"/printers/{printer_id}",
+        json={"model": "QIDI X-Max3", "api_key": None},
+    )
+
+    assert patch_response.status_code == 200
+    body = patch_response.json()
+    assert body["model"] == "QIDI X-Max3"
+    assert body["api_key"] is None
+
+def test_patch_printer_empty_body_is_noop_and_keeps_updated_at(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """AC E1-3 (quyết định phạm vi C0): PATCH body rỗng là no-op hợp lệ
+    -> 200, dữ liệu giữ nguyên, `updated_at` KHÔNG đổi (khác PATCH có
+    field thật sự thay đổi)."""
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    first_patch = client.patch(f"/printers/{registered['id']}", json={"name": "Printer First Patch"})
+    assert first_patch.status_code == 200
+    updated_at_after_real_patch = first_patch.json()["updated_at"]
+
+    empty_patch = client.patch(f"/printers/{registered['id']}", json={})
+
+    assert empty_patch.status_code == 200
+    body = empty_patch.json()
+    assert body["name"] == "Printer First Patch"
+    assert body["updated_at"] == updated_at_after_real_patch
+
+def test_patch_printer_not_found_returns_404(client: TestClient, tmp_path, monkeypatch) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+
+    response = client.patch("/printers/999999", json={"name": "Ghost Printer"})
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
+
+def test_patch_printer_ignores_ip_field(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """AC E1-3 (quyết định phạm vi C0): `ip`/`moonraker_port` KHÔNG sửa
+    được qua PATCH - `PrinterUpdateRequest` không khai báo field này
+    nên FastAPI/Pydantic bỏ qua field lạ trong body, không raise lỗi."""
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    response = client.patch(
+        f"/printers/{registered['id']}",
+        json={"name": "Printer IP Unchanged", "ip": "10.0.0.99"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ip"] == registered["ip"]
+
+def test_delete_printer_success_returns_204_and_removes_row(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """AC E1-3: DELETE 1 máy không có job active (status mặc định
+    `UNKNOWN`) -> 204 (body rỗng), hard delete - dòng bị xoá khỏi DB."""
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    assert _count_printers(db_path) == 1
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert _count_printers(db_path) == 0
+
+def test_delete_printer_not_found_returns_404(client: TestClient, tmp_path, monkeypatch) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+
+    response = client.delete("/printers/999999")
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
+
+def _set_printer_status(db_path: str, printer_id: int, status_value: str) -> None:
+    """UPDATE trực tiếp cột `status` của 1 máy qua kết nối SQLite riêng
+    - chưa có cách set `status` PRINTING/PAUSED qua API công khai (Epic
+    4 Job Queue chưa triển khai), dùng trực tiếp DB tạm của test."""
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET status = ? WHERE id = ?", (status_value, printer_id)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def test_delete_printer_blocked_when_status_is_printing(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """AC E1-3: "không xoá được máy đang có job active" - status
+    PRINTING (D-013/D-010) -> 409, KHÔNG xoá."""
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    _set_printer_status(db_path, registered["id"], "PRINTING")
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert "detail" in response.json()
+    assert _count_printers(db_path) == 1
+
+def test_delete_printer_blocked_when_status_is_paused(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """Giống case PRINTING - PAUSED cũng thuộc định nghĩa "có job
+    active" đã chốt ở D-013/D-010 -> 409, KHÔNG xoá."""
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    _set_printer_status(db_path, registered["id"], "PAUSED")
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert _count_printers(db_path) == 1
+
+def test_delete_printer_blocked_by_related_job_row(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    """`PRAGMA foreign_keys = ON` (dùng nhất quán từ E1-1) khiến DELETE
+    raise `IntegrityError` khi còn dòng `jobs` tham chiếu `printer_id`
+    - map sang 409 như lớp bảo vệ bổ sung (khác thông báo với case "có
+    job active"), dù bảng `jobs` luôn rỗng ở giai đoạn thực tế hiện tại
+    (Epic 4 chưa triển khai) - case này insert thủ công để mô phỏng.
+    `status` của máy vẫn giữ mặc định (không phải PRINTING/PAUSED) để
+    chắc chắn đây là nhánh IntegrityError, không phải has_active_job."""
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO jobs (printer_id, filename) VALUES (?, ?)",
+            (registered["id"], "test-model.gcode"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert "detail" in response.json()
+    assert _count_printers(db_path) == 1
