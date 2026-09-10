@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS printers (
         )),
     is_held INTEGER NOT NULL DEFAULT 0
         CHECK (is_held IN (0, 1)),
+    consecutive_heartbeat_failures INTEGER NOT NULL DEFAULT 0,
+    next_heartbeat_at TEXT,
     created_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL
