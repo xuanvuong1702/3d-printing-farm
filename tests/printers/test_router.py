@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from fastapi.testclient import TestClient
 
 import app.printers.router as printers_router_module
+from app.printers.service import delete_printer as _real_delete_printer
 from app.printers.service import list_printers as _real_list_printers
+from app.printers.service import update_printer as _real_update_printer
 
 def _count_printers(db_path: str) -> int:
     connection = sqlite3.connect(db_path)
@@ -29,6 +32,22 @@ def _bind_list_printers(monkeypatch, tmp_path) -> str:
         printers_router_module,
         "list_printers",
         lambda: _real_list_printers(db_path=db_path),
+    )
+    return db_path
+
+def _bind_update_and_delete_printer(monkeypatch, tmp_path) -> str:
+    db_path = str(tmp_path / "test_printers.db")
+    monkeypatch.setattr(
+        printers_router_module,
+        "update_printer",
+        lambda printer_id, request: _real_update_printer(
+            printer_id, request, db_path=db_path
+        ),
+    )
+    monkeypatch.setattr(
+        printers_router_module,
+        "delete_printer",
+        lambda printer_id: _real_delete_printer(printer_id, db_path=db_path),
     )
     return db_path
 
@@ -246,3 +265,171 @@ def test_list_printers_mixed_online_and_offline_printers(
     db_status_by_ip = _printer_status_by_ip(db_path)
     assert db_status_by_ip[online_ip] == "IDLE"
     assert db_status_by_ip[offline_ip] == "OFFLINE"
+
+def _register_one_printer(client: TestClient, simulator: int, name: str = "Printer E1-3") -> dict:
+    response = client.post(
+        "/printers",
+        json={"name": name, "ip": "127.0.0.1", "moonraker_port": simulator},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+def test_patch_printer_updates_name(client: TestClient, simulator: int, tmp_path, monkeypatch) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    time.sleep(1.1)
+
+    response = client.patch(f"/printers/{registered['id']}", json={"name": "Printer Renamed"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Printer Renamed"
+    assert body["updated_at"] != registered["updated_at"]
+
+    assert body["ip"] == registered["ip"]
+
+def test_patch_printer_updates_model_and_api_key_including_explicit_null(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    response = client.post(
+        "/printers",
+        json={
+            "name": "Printer With Model",
+            "ip": "127.0.0.1",
+            "moonraker_port": simulator,
+            "model": "QIDI Plus4",
+            "api_key": "secret-key",
+        },
+    )
+    assert response.status_code == 201
+    printer_id = response.json()["id"]
+
+    patch_response = client.patch(
+        f"/printers/{printer_id}",
+        json={"model": "QIDI X-Max3", "api_key": None},
+    )
+
+    assert patch_response.status_code == 200
+    body = patch_response.json()
+    assert body["model"] == "QIDI X-Max3"
+    assert body["api_key"] is None
+
+def test_patch_printer_empty_body_is_noop_and_keeps_updated_at(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    first_patch = client.patch(f"/printers/{registered['id']}", json={"name": "Printer First Patch"})
+    assert first_patch.status_code == 200
+    updated_at_after_real_patch = first_patch.json()["updated_at"]
+
+    empty_patch = client.patch(f"/printers/{registered['id']}", json={})
+
+    assert empty_patch.status_code == 200
+    body = empty_patch.json()
+    assert body["name"] == "Printer First Patch"
+    assert body["updated_at"] == updated_at_after_real_patch
+
+def test_patch_printer_not_found_returns_404(client: TestClient, tmp_path, monkeypatch) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+
+    response = client.patch("/printers/999999", json={"name": "Ghost Printer"})
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
+
+def test_patch_printer_ignores_ip_field(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    response = client.patch(
+        f"/printers/{registered['id']}",
+        json={"name": "Printer IP Unchanged", "ip": "10.0.0.99"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ip"] == registered["ip"]
+
+def test_delete_printer_success_returns_204_and_removes_row(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    assert _count_printers(db_path) == 1
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert _count_printers(db_path) == 0
+
+def test_delete_printer_not_found_returns_404(client: TestClient, tmp_path, monkeypatch) -> None:
+    _bind_update_and_delete_printer(monkeypatch, tmp_path)
+
+    response = client.delete("/printers/999999")
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
+
+def _set_printer_status(db_path: str, printer_id: int, status_value: str) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET status = ? WHERE id = ?", (status_value, printer_id)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def test_delete_printer_blocked_when_status_is_printing(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    _set_printer_status(db_path, registered["id"], "PRINTING")
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert "detail" in response.json()
+    assert _count_printers(db_path) == 1
+
+def test_delete_printer_blocked_when_status_is_paused(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+    _set_printer_status(db_path, registered["id"], "PAUSED")
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert _count_printers(db_path) == 1
+
+def test_delete_printer_blocked_by_related_job_row(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_update_and_delete_printer(monkeypatch, tmp_path)
+    registered = _register_one_printer(client, simulator)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO jobs (printer_id, filename) VALUES (?, ?)",
+            (registered["id"], "test-model.gcode"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    response = client.delete(f"/printers/{registered['id']}")
+
+    assert response.status_code == 409
+    assert "detail" in response.json()
+    assert _count_printers(db_path) == 1
