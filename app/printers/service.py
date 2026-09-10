@@ -1,0 +1,119 @@
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from typing import List, Optional
+
+from app.db.migrate import DEFAULT_DB_PATH
+from app.drivers import resolve_driver
+from app.moonraker.http_client import MoonrakerClientError
+from app.printers.schemas import PrinterCreateRequest, PrinterResponse
+
+_INSERT_PRINTER_SQL = """
+INSERT INTO printers (
+    name, ip, moonraker_port, model, api_key,
+    moonraker_version, klipper_version, capabilities
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+_SELECT_PRINTER_BY_ID_SQL = """
+SELECT id, name, ip, moonraker_port, model, api_key,
+       moonraker_version, klipper_version, capabilities,
+       status, is_held, created_at, updated_at
+FROM printers WHERE id = ?
+"""
+
+class PrinterConnectionError(Exception):
+    pass
+
+class PrinterAlreadyExistsError(Exception):
+    pass
+
+def register_printer(
+    request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
+) -> PrinterResponse:
+    driver = resolve_driver(
+        model=request.model,
+        firmware_version=None,
+        host=request.ip,
+        port=request.moonraker_port,
+        api_key=request.api_key,
+    )
+
+    try:
+        server_info = driver.get_server_info()
+        printer_info = driver.get_printer_info()
+    except MoonrakerClientError as exc:
+        raise PrinterConnectionError(
+            f"Không kết nối/xác nhận được Moonraker tại "
+            f"{request.ip}:{request.moonraker_port}: {exc}"
+        ) from exc
+
+    moonraker_version: Optional[str] = server_info.get("moonraker_version")
+    capabilities: List[str] = server_info.get("components", [])
+    klipper_version: Optional[str] = printer_info.get("software_version")
+    capabilities_json = json.dumps(capabilities)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            cursor = connection.execute(
+                _INSERT_PRINTER_SQL,
+                (
+                    request.name,
+                    request.ip,
+                    request.moonraker_port,
+                    request.model,
+                    request.api_key,
+                    moonraker_version,
+                    klipper_version,
+                    capabilities_json,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise PrinterAlreadyExistsError(
+                f"IP {request.ip!r} đã được đăng ký trước đó."
+            ) from exc
+
+        connection.commit()
+        row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (cursor.lastrowid,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(row)
+
+def _row_to_response(row: tuple) -> PrinterResponse:
+    (
+        id_,
+        name,
+        ip,
+        moonraker_port,
+        model,
+        api_key,
+        moonraker_version,
+        klipper_version,
+        capabilities_json,
+        status,
+        is_held,
+        created_at,
+        updated_at,
+    ) = row
+    return PrinterResponse(
+        id=id_,
+        name=name,
+        ip=ip,
+        moonraker_port=moonraker_port,
+        model=model,
+        api_key=api_key,
+        moonraker_version=moonraker_version,
+        klipper_version=klipper_version,
+        capabilities=json.loads(capabilities_json),
+        status=status,
+        is_held=bool(is_held),
+        created_at=created_at,
+        updated_at=updated_at,
+    )
