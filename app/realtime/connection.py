@@ -1,15 +1,39 @@
 """
-Kết nối WebSocket cho 1 máy in (E2-1/C2) - wrapper quanh
+Kết nối WebSocket cho 1 máy in (E2-1/C2, cập nhật C3) - wrapper quanh
 `MoonrakerClient`/`MoonrakerListener` (thư viện `moonraker-api`, D-002
 phần 2).
 
-Phạm vi chunk này (`docs/State_E2-1_v3.md` mục "CHUNK KẾ TIẾP CẦN
-CHẠY"): quản lý ĐÚNG 1 kết nối WS - `connect()` + gửi
-`printer.objects.subscribe` (`SUBSCRIBE_OBJECTS`, 5 object, Quyết định
-3, `app/realtime/state.py`), nhận notification + map -> ghi vào
-`RealtimeStateStore` (đã có từ C1). CHƯA có backoff/reconnect khi rớt
-kết nối (Quyết định 2, thuộc C3) - `state_changed`/`on_exception` ở
-đây là no-op có chủ đích (chỉ log), KHÔNG tự gọi lại `connect()`.
+Phạm vi C2 (`docs/State_E2-1_v3.md`): quản lý ĐÚNG 1 kết nối WS -
+`connect()` + gửi `printer.objects.subscribe` (`SUBSCRIBE_OBJECTS`, 5
+object, Quyết định 3, `app/realtime/state.py`), nhận notification +
+map -> ghi vào `RealtimeStateStore` (đã có từ C1).
+
+Cập nhật C3 (`docs/State_E2-1_v4.md` mục "CHUNK KẾ TIẾP CẦN CHẠY") -
+2 thay đổi, cả hai được state C4 dự kiến trước và có lý do rõ:
+
+1. Thêm tham số `session` (truyền thẳng xuống `MoonrakerClient`) - xử
+   lý rủi ro phát hiện ở C2 ("Rủi ro/giới hạn để lại" của
+   `docs/State_E2-1_v4.md`): nếu không truyền `session=` tường minh,
+   thư viện tự tạo 1 `aiohttp.ClientSession` ngầm trong `connect()`
+   nhưng `disconnect()` KHÔNG tự đóng session đó -> rò rỉ khi có N kết
+   nối dài hạn (pool, C3). `PrinterWebsocketConnection` giờ CHỈ nhận
+   session do caller (pool) tạo + sở hữu; việc tạo/đóng session là
+   trách nhiệm của `pool.py`, KHÔNG phải của class này (1 class này =
+   1 kết nối logic, không nên tự quản vòng đời tài nguyên dùng chung
+   tiềm năng).
+2. Phát hiện chuyển trạng thái CONNECTED -> STOPPED (để `pool.py` biết
+   khi nào cần backoff + gọi lại `connect()`, Quyết định 2) qua
+   `asyncio.Event` (`disconnected`) được set trong `state_changed()` -
+   KHÔNG polling `is_connected` (đúng yêu cầu của state C3): thư viện
+   tự gọi `listener.state_changed(value)` mỗi khi `WebsocketClient`
+   đổi `state` (xem `moonraker_api/websockets/websocketclient.py`,
+   `state` là property với setter tạo task gọi callback này) - đăng ký
+   nhận đúng sự kiện thư viện đã phát ra thay vì tự suy luận qua vòng
+   lặp polling. Chỉ set `disconnected` khi từng đạt `CONNECTED` trước
+   đó rồi rơi về `STOPPED` (không set ngay từ trạng thái `STOPPED` ban
+   đầu lúc chưa từng kết nối - `_connected_once` phân biệt 2 trường hợp
+   này), để `pool.py` chỉ coi là "rớt kết nối cần reconnect" đúng 1
+   lần/lượt rớt, không nhầm với trạng thái nghỉ ban đầu.
 
 Map trạng thái (D-013) - TÁI DÙNG trực tiếp
 `app.moonraker.http_client._map_print_stats_state` (import thẳng,
@@ -42,12 +66,15 @@ dùng ở C3 khi dựng pool cho N máy.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+import aiohttp
 from moonraker_api import MoonrakerClient, MoonrakerListener
+from moonraker_api.const import WEBSOCKET_STATE_CONNECTED, WEBSOCKET_STATE_STOPPED
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.moonraker.http_client import (
@@ -147,9 +174,12 @@ def _compute_state(raw_status: Dict[str, Dict[str, Any]]) -> RealtimePrinterStat
     )
 
 class PrinterWebsocketConnection(MoonrakerListener):
-    """1 kết nối WS tới Moonraker cho 1 máy in. CHƯA có backoff/reconnect
-    (thuộc C3) - nếu kết nối rớt, `state_changed`/`on_exception` chỉ
-    log, KHÔNG tự gọi lại `connect()`."""
+    """1 kết nối WS tới Moonraker cho 1 máy in.
+
+    Backoff/reconnect KHÔNG nằm trong class này (thuộc `pool.py`, C3,
+    Quyết định 2) - class này chỉ phơi ra `disconnected` (`asyncio.Event`)
+    để caller biết KHI NÀO cần gọi lại `connect()`, không tự lặp lại.
+    """
 
     def __init__(
         self,
@@ -158,11 +188,18 @@ class PrinterWebsocketConnection(MoonrakerListener):
         port: int,
         api_key: Optional[str],
         store: RealtimeStateStore,
+        session: Optional[aiohttp.ClientSession] = None,
     ) -> None:
         self.printer_id = printer_id
         self.store = store
         self._raw_status: Dict[str, Dict[str, Any]] = {}
-        self._client = MoonrakerClient(listener=self, host=host, port=port, api_key=api_key)
+        self._connected_once = False
+
+        self.disconnected = asyncio.Event()
+
+        self._client = MoonrakerClient(
+            listener=self, host=host, port=port, api_key=api_key, session=session
+        )
 
     @property
     def is_connected(self) -> bool:
@@ -173,6 +210,7 @@ class PrinterWebsocketConnection(MoonrakerListener):
         định 3). Ghi ngay state ban đầu từ response subscribe (không
         đợi notification đầu tiên - response subscribe đã trả snapshot
         hiện tại của các object được subscribe)."""
+        self.disconnected.clear()
         connected = await self._client.connect()
         if not connected:
             return False
@@ -202,13 +240,23 @@ class PrinterWebsocketConnection(MoonrakerListener):
         await self._handle_status_delta(status_delta)
 
     async def state_changed(self, state: str) -> None:
-        """No-op có chủ đích ở chunk này (chỉ log) - reconnect thuộc C3
-        (Quyết định 2)."""
+        """`WebsocketStatusListener` override - thư viện tự gọi mỗi khi
+        `WebsocketClient.state` đổi giá trị. Set `self.disconnected` khi
+        rơi từ `CONNECTED` về `STOPPED` để `pool.py` (C3) biết lúc nào
+        cần backoff + gọi lại `connect()` (Quyết định 2) - KHÔNG tự
+        reconnect ở đây, class này chỉ báo hiệu."""
         _LOGGER.debug("Printer %s websocket state -> %s", self.printer_id, state)
+        if state == WEBSOCKET_STATE_CONNECTED:
+            self._connected_once = True
+        elif state == WEBSOCKET_STATE_STOPPED and self._connected_once:
+            self._connected_once = False
+            self.disconnected.set()
 
     async def on_exception(self, exception: Any) -> None:
-        """No-op có chủ đích ở chunk này (chỉ log) - reconnect thuộc C3
-        (Quyết định 2)."""
+        """Chỉ log - `state_changed` (ở trên) là nơi phát hiện rớt kết
+        nối để reconnect (Quyết định 2), không cần xử lý riêng ở đây vì
+        thư viện luôn chuyển `state` về `STOPPED` sau mọi exception
+        (xem `WebsocketClient._run`, khối `finally`)."""
         _LOGGER.warning(
             "Printer %s websocket exception: %s", self.printer_id, exception
         )

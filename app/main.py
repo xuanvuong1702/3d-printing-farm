@@ -18,6 +18,14 @@ heartbeat scheduler nền (`app/heartbeat/scheduler.py`, C3) — CHỈ wiring
 có. Trước chunk này service chưa có `lifespan`/`@app.on_event` nào —
 đây là lần đầu áp dụng cơ chế chạy nền, đúng Quyết định 3 đã chốt ở C0
 (`docs/State_E1-4_v4.md`).
+
+Chunk E2-1/C3: mở rộng `lifespan` (KHÔNG đổi phần heartbeat đã khoá ở
+trên, chỉ thêm) để khởi động/huỷ pool kết nối WebSocket real-time
+(`app/realtime/pool.py`, C3, Quyết định 6) — startup:
+`start_websocket_pool(store)`; shutdown: `stop_websocket_pool(pool)`.
+`RealtimeStateStore` (C1) được tạo 1 lần ở đây và gán vào
+`app.state.realtime_store` để các route tương lai (ngoài phạm vi story
+này) có thể đọc state real-time mà không cần biến toàn cục.
 """
 
 from contextlib import asynccontextmanager
@@ -27,13 +35,19 @@ from fastapi import FastAPI
 
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 from app.printers.router import router as printers_router
+from app.realtime.pool import start_websocket_pool, stop_websocket_pool
+from app.realtime.state import RealtimeStateStore
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     heartbeat_task = start_heartbeat_scheduler()
+    realtime_store = RealtimeStateStore()
+    app.state.realtime_store = realtime_store
+    websocket_pool = start_websocket_pool(realtime_store)
     try:
         yield
     finally:
+        await stop_websocket_pool(websocket_pool)
         await stop_heartbeat_scheduler(heartbeat_task)
 
 app = FastAPI(title="QIDI Print Farm Orchestration Service", lifespan=lifespan)
