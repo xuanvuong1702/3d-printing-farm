@@ -89,6 +89,40 @@ def test_pool_one_printer_failure_does_not_affect_others(
 
     asyncio.run(_scenario(realtime_db_path))
 
+def test_pool_handles_five_printers_independently(
+    simulator_factory, insert_printer, realtime_db_path
+) -> None:
+    """Khớp sát chữ của AC gốc E2-1 ("WS pool ổn định cho 5 máy") — 2 test
+    khác trong file này (N máy độc lập, 1 máy lỗi) đã chứng minh KIẾN
+    TRÚC không phân biệt số lượng máy (`pool.py` tạo 1 task/dòng
+    `printers`, không có logic đặc biệt theo số lượng), nhưng test riêng
+    này xác nhận trực tiếp với ĐÚNG 5 instance đồng thời thay vì suy luận
+    từ 2 — đóng chunk C6 (Integration & Verification) với bằng chứng khớp
+    sát AC hơn là chỉ đọc lại code. KHÔNG benchmark RAM/CPU Pi 4 thật (rủi
+    ro đã ghi nhận từ C0, ngoài phạm vi 1 test tích hợp)."""
+    handles = [simulator_factory(host=f"127.0.0.{i}") for i in range(1, 6)]
+    printer_ids = [
+        insert_printer(h.host, h.port, name=f"Máy {i}")
+        for i, h in enumerate(handles, start=1)
+    ]
+
+    async def _scenario(db_path: str):
+        store = RealtimeStateStore()
+        pool = WebsocketPool(store=store, db_path=db_path)
+        pool.start()
+        try:
+            await asyncio.sleep(_NOTIFICATION_SETTLE_SECONDS)
+            for printer_id in printer_ids:
+                current = await store.get(printer_id)
+                assert current is not None
+                assert current.canonical_status == CANONICAL_IDLE
+        finally:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                await pool.stop()
+
+    asyncio.run(_scenario(realtime_db_path))
+
 def test_pool_reconnects_after_simulator_restart(
     simulator_factory, insert_printer, realtime_db_path
 ) -> None:
