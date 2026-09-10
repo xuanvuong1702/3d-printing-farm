@@ -71,6 +71,32 @@ def test_pool_one_printer_failure_does_not_affect_others(
 
     asyncio.run(_scenario(realtime_db_path))
 
+def test_pool_handles_five_printers_independently(
+    simulator_factory, insert_printer, realtime_db_path
+) -> None:
+    handles = [simulator_factory(host=f"127.0.0.{i}") for i in range(1, 6)]
+    printer_ids = [
+        insert_printer(h.host, h.port, name=f"Máy {i}")
+        for i, h in enumerate(handles, start=1)
+    ]
+
+    async def _scenario(db_path: str):
+        store = RealtimeStateStore()
+        pool = WebsocketPool(store=store, db_path=db_path)
+        pool.start()
+        try:
+            await asyncio.sleep(_NOTIFICATION_SETTLE_SECONDS)
+            for printer_id in printer_ids:
+                current = await store.get(printer_id)
+                assert current is not None
+                assert current.canonical_status == CANONICAL_IDLE
+        finally:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                await pool.stop()
+
+    asyncio.run(_scenario(realtime_db_path))
+
 def test_pool_reconnects_after_simulator_restart(
     simulator_factory, insert_printer, realtime_db_path
 ) -> None:
