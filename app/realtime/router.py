@@ -4,9 +4,14 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from app.realtime.schemas import PrinterRealtimeResponse
-from app.realtime.service import get_printer_realtime, list_printers_realtime
+from app.realtime.service import (
+    get_printer_realtime,
+    list_printers_realtime,
+    realtime_sse_event_generator,
+)
 
 router = APIRouter()
 
@@ -27,3 +32,13 @@ async def list_printers_realtime_snapshot(
     request: Request,
 ) -> List[PrinterRealtimeResponse]:
     return await list_printers_realtime(request.app.state.realtime_store)
+
+@router.get("/printers/realtime/stream")
+async def stream_printers_realtime(request: Request) -> StreamingResponse:
+    return StreamingResponse(
+        realtime_sse_event_generator(
+            request.app.state.realtime_store,
+            is_disconnected=request.is_disconnected,
+        ),
+        media_type="text/event-stream",
+    )

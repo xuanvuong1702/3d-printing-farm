@@ -1,12 +1,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import sqlite3
-from typing import List, Optional
+from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.realtime.schemas import PrinterRealtimeResponse
 from app.realtime.state import RealtimePrinterState, RealtimeStateStore
+
+REALTIME_STREAM_INTERVAL_SECONDS = 1.0
 
 _SELECT_PRINTER_ID_NAME_STATUS_SQL = """
 SELECT id, name, status FROM printers WHERE id = ?
@@ -83,3 +87,20 @@ async def list_printers_realtime(
         )
         for printer_id, name, db_status in rows
     ]
+
+def _format_sse_data_line(snapshot: List[PrinterRealtimeResponse]) -> str:
+    payload = json.dumps([response.model_dump() for response in snapshot])
+    return f"data: {payload}\n\n"
+
+async def realtime_sse_event_generator(
+    store: RealtimeStateStore,
+    is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
+    db_path: str = DEFAULT_DB_PATH,
+    interval_seconds: float = REALTIME_STREAM_INTERVAL_SECONDS,
+) -> AsyncIterator[str]:
+    while True:
+        if is_disconnected is not None and await is_disconnected():
+            return
+        snapshot = await list_printers_realtime(store, db_path=db_path)
+        yield _format_sse_data_line(snapshot)
+        await asyncio.sleep(interval_seconds)
