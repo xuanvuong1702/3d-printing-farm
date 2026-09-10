@@ -32,6 +32,26 @@ sau này thật sự gọi lại `resolve_driver` với `firmware_version` đã 
 
 Driver không bao giờ chạm DB (CLAUDE.md nguyên tắc #2, D-006) — mọi
 INSERT/SELECT ở đây, KHÔNG nằm trong `app/drivers/`.
+
+Luồng `list_printers` (E1-2/C1) — poll-on-request qua HTTP, xem
+`docs/State_E1-2_v2.md` mục "Quyết định phạm vi chốt tại chunk C0" cho
+rationale đầy đủ (kênh WS bền/push thật để dành E2-1, KHÔNG lặp lại ở
+đây):
+1. SELECT toàn bộ bảng `printers`.
+2. Với mỗi máy: `resolve_driver(model, firmware_version=klipper_version
+   đã lưu, host=ip, port=moonraker_port, api_key)` (dùng nguyên cơ chế
+   resolution đã khoá từ E0-6, D-006/D-012 — KHÔNG viết lại), rồi gọi
+   `driver.get_status()` — một hình thức "ping" HTTP thuần (D-002 phần
+   1) phản ánh trạng thái tại đúng thời điểm request, không phải push
+   liên tục.
+3. Nếu bản thân lệnh gọi thất bại hẳn (`MoonrakerClientError` — không
+   kết nối được, khác với "kết nối được nhưng Klippy chưa sẵn sàng" mà
+   `get_status()` đã tự map `OFFLINE` sẵn, D-013) → tầng này bắt
+   exception và map tường minh sang `OFFLINE`. 1 máy lỗi không được làm
+   hỏng response chứa các máy khác.
+4. Ghi đè (UPDATE) cột `status` (+ `updated_at`, cột này KHÔNG có
+   trigger tự động ở DDL, `app/db/schema.py`) trước khi trả response —
+   write-through, D-013 "canonical status" là nguồn sự thật chung.
 """
 
 from __future__ import annotations
@@ -57,6 +77,17 @@ SELECT id, name, ip, moonraker_port, model, api_key,
        moonraker_version, klipper_version, capabilities,
        status, is_held, created_at, updated_at
 FROM printers WHERE id = ?
+"""
+
+_SELECT_ALL_PRINTER_CONN_INFO_SQL = """
+SELECT id, ip, moonraker_port, model, api_key, klipper_version
+FROM printers
+"""
+
+_UPDATE_PRINTER_STATUS_SQL = """
+UPDATE printers
+SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
 """
 
 class PrinterConnectionError(Exception):
@@ -121,6 +152,46 @@ def register_printer(
         connection.close()
 
     return _row_to_response(row)
+
+def list_printers(db_path: str = DEFAULT_DB_PATH) -> List[PrinterResponse]:
+    """Danh sách toàn bộ máy đã đăng ký kèm trạng thái poll-on-request
+    (E1-2/C1) — xem docstring module này và
+    `docs/State_E1-2_v2.md` để biết rationale đầy đủ. Không raise cho lỗi
+    kết nối của từng máy riêng lẻ (map sang `OFFLINE`, ghi log qua giá
+    trị trả về, không phải exception)."""
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        conn_rows = connection.execute(_SELECT_ALL_PRINTER_CONN_INFO_SQL).fetchall()
+
+        responses: List[PrinterResponse] = []
+        for printer_id, ip, moonraker_port, model, api_key, klipper_version in conn_rows:
+            driver = resolve_driver(
+                model=model,
+                firmware_version=klipper_version,
+                host=ip,
+                port=moonraker_port,
+                api_key=api_key,
+            )
+            try:
+                canonical_status = driver.get_status().canonical_status
+            except MoonrakerClientError:
+
+                canonical_status = "OFFLINE"
+
+            connection.execute(
+                _UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id)
+            )
+            connection.commit()
+
+            updated_row = connection.execute(
+                _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+            ).fetchone()
+            responses.append(_row_to_response(updated_row))
+    finally:
+        connection.close()
+
+    return responses
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)
