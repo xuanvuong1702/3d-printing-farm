@@ -26,11 +26,6 @@ trên, chỉ thêm) để khởi động/huỷ pool kết nối WebSocket real-t
 `RealtimeStateStore` (C1) được tạo 1 lần ở đây và gán vào
 `app.state.realtime_store` để các route tương lai (ngoài phạm vi story
 này) có thể đọc state real-time mà không cần biến toàn cục.
-
-Chunk E2-2/C2: include router thứ 2 (`app/realtime/router.py`, domain
-"giám sát real-time" — 2 endpoint snapshot đọc `app.state.realtime_store`
-đã gán ở trên) — KHÔNG đổi `printers_router`/route `/`/`lifespan` hiện
-có.
 """
 
 from contextlib import asynccontextmanager
@@ -41,7 +36,6 @@ from fastapi import FastAPI
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 from app.printers.router import router as printers_router
 from app.realtime.pool import start_websocket_pool, stop_websocket_pool
-from app.realtime.router import router as realtime_router
 from app.realtime.state import RealtimeStateStore
 
 @asynccontextmanager
@@ -58,7 +52,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="QIDI Print Farm Orchestration Service", lifespan=lifespan)
 app.include_router(printers_router)
-app.include_router(realtime_router)
 
 @app.get("/")
 def read_root() -> dict:
