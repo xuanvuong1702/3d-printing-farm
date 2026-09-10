@@ -14,3 +14,8 @@ class SimulatorState:
     print_stats_print_duration: float = 0.0
 
     virtual_sdcard_progress: float = 0.0
+
+    extruder_temperature: float = 25.0
+    extruder_target: float = 0.0
+    heater_bed_temperature: float = 25.0
+    heater_bed_target: float = 0.0
