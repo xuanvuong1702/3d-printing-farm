@@ -24,6 +24,17 @@ SELECT id, name, ip, moonraker_port, model, api_key,
 FROM printers WHERE id = ?
 """
 
+_SELECT_ALL_PRINTER_CONN_INFO_SQL = """
+SELECT id, ip, moonraker_port, model, api_key, klipper_version
+FROM printers
+"""
+
+_UPDATE_PRINTER_STATUS_SQL = """
+UPDATE printers
+SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
 class PrinterConnectionError(Exception):
     pass
 
@@ -85,6 +96,41 @@ def register_printer(
         connection.close()
 
     return _row_to_response(row)
+
+def list_printers(db_path: str = DEFAULT_DB_PATH) -> List[PrinterResponse]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        conn_rows = connection.execute(_SELECT_ALL_PRINTER_CONN_INFO_SQL).fetchall()
+
+        responses: List[PrinterResponse] = []
+        for printer_id, ip, moonraker_port, model, api_key, klipper_version in conn_rows:
+            driver = resolve_driver(
+                model=model,
+                firmware_version=klipper_version,
+                host=ip,
+                port=moonraker_port,
+                api_key=api_key,
+            )
+            try:
+                canonical_status = driver.get_status().canonical_status
+            except MoonrakerClientError:
+
+                canonical_status = "OFFLINE"
+
+            connection.execute(
+                _UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id)
+            )
+            connection.commit()
+
+            updated_row = connection.execute(
+                _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+            ).fetchone()
+            responses.append(_row_to_response(updated_row))
+    finally:
+        connection.close()
+
+    return responses
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
