@@ -1,8 +1,8 @@
 """
-FastAPI `APIRouter` cho lớp API giám sát real-time (E2-2/C2) — mount
-`GET /printers/{printer_id}/realtime` (snapshot 1 máy) và
-`GET /printers/realtime` (snapshot toàn bộ máy). Endpoint SSE
-(`GET /printers/realtime/stream`) thuộc C3, CHƯA có ở chunk này.
+FastAPI `APIRouter` cho lớp API giám sát real-time (E2-2/C2+C3) — mount
+`GET /printers/{printer_id}/realtime` (snapshot 1 máy),
+`GET /printers/realtime` (snapshot toàn bộ máy), và
+`GET /printers/realtime/stream` (SSE, đẩy định kỳ, C3).
 
 Đọc `RealtimeStateStore` qua `request.app.state.realtime_store` (được
 gán 1 lần lúc `lifespan` startup, `app/main.py`, E2-1/C3) — router này
@@ -30,9 +30,14 @@ from __future__ import annotations
 from typing import List
 
 from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from app.realtime.schemas import PrinterRealtimeResponse
-from app.realtime.service import get_printer_realtime, list_printers_realtime
+from app.realtime.service import (
+    get_printer_realtime,
+    list_printers_realtime,
+    realtime_sse_event_generator,
+)
 
 router = APIRouter()
 
@@ -60,3 +65,22 @@ async def list_printers_realtime_snapshot(
     stream`, C3) kết nối. Danh sách rỗng nếu chưa có máy nào đăng ký —
     không phải lỗi."""
     return await list_printers_realtime(request.app.state.realtime_store)
+
+@router.get("/printers/realtime/stream")
+async def stream_printers_realtime(request: Request) -> StreamingResponse:
+    """Server-Sent Events (SSE) — đẩy snapshot real-time của TOÀN BỘ
+    máy mỗi `REALTIME_STREAM_INTERVAL_SECONDS` giây (`app/realtime/
+    service.py`, Quyết định phạm vi #2/#3, `docs/State_E2-2_v2.md`).
+
+    Route là **async generator function** riêng (khác signature 2 route
+    snapshot ở trên) — nhận `Request` để truyền `request.is_disconnected`
+    vào `realtime_sse_event_generator` (dừng generator sạch khi client
+    rời đi, không rò rỉ task nền chạy vô hạn) và đọc
+    `request.app.state.realtime_store`."""
+    return StreamingResponse(
+        realtime_sse_event_generator(
+            request.app.state.realtime_store,
+            is_disconnected=request.is_disconnected,
+        ),
+        media_type="text/event-stream",
+    )

@@ -19,12 +19,16 @@ tại `_merge_row_with_realtime_state` — xem docstring hàm đó.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import sqlite3
-from typing import List, Optional
+from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.realtime.schemas import PrinterRealtimeResponse
 from app.realtime.state import RealtimePrinterState, RealtimeStateStore
+
+REALTIME_STREAM_INTERVAL_SECONDS = 1.0
 
 _SELECT_PRINTER_ID_NAME_STATUS_SQL = """
 SELECT id, name, status FROM printers WHERE id = ?
@@ -120,3 +124,38 @@ async def list_printers_realtime(
         )
         for printer_id, name, db_status in rows
     ]
+
+def _format_sse_data_line(snapshot: List[PrinterRealtimeResponse]) -> str:
+    """Format 1 dòng SSE hợp lệ (`"data: " + JSON + "\\n\\n"`, chuẩn
+    Server-Sent Events) chứa mảng `PrinterRealtimeResponse` hiện tại."""
+    payload = json.dumps([response.model_dump() for response in snapshot])
+    return f"data: {payload}\n\n"
+
+async def realtime_sse_event_generator(
+    store: RealtimeStateStore,
+    is_disconnected: Optional[Callable[[], Awaitable[bool]]] = None,
+    db_path: str = DEFAULT_DB_PATH,
+    interval_seconds: float = REALTIME_STREAM_INTERVAL_SECONDS,
+) -> AsyncIterator[str]:
+    """Async generator đẩy snapshot TOÀN BỘ máy (định dạng SSE) mỗi
+    `interval_seconds` giây cho `GET /printers/realtime/stream` (C3,
+    Quyết định phạm vi #2/#3, `docs/State_E2-2_v2.md`).
+
+    `is_disconnected` là 1 coroutine function KHÔNG đối số (thường là
+    `request.is_disconnected` của FastAPI `Request`, truyền vào từ
+    router — tách khỏi `Request` để hàm này test được độc lập không
+    cần dựng app/client thật). Được gọi ở ĐẦU mỗi vòng lặp, TRƯỚC khi
+    query lại store — nếu trả `True`, dừng generator ngay (`return`,
+    không `yield` thêm), tránh rò rỉ vòng lặp/task nền chạy vô hạn sau
+    khi client đã rời đi (cùng tinh thần "không rò rỉ" đã áp dụng cho
+    tầng thu thập dữ liệu ở E2-1). Nếu không truyền (`None`), generator
+    chạy tới khi bị huỷ từ bên ngoài (ví dụ test dùng `itertools.islice`
+    hoặc huỷ task) — dùng cho kiểm thử đơn giản không cần mô phỏng
+    disconnect.
+    """
+    while True:
+        if is_disconnected is not None and await is_disconnected():
+            return
+        snapshot = await list_printers_realtime(store, db_path=db_path)
+        yield _format_sse_data_line(snapshot)
+        await asyncio.sleep(interval_seconds)
