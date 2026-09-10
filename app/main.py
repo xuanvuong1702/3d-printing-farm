@@ -7,7 +7,6 @@ from fastapi import FastAPI
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 from app.printers.router import router as printers_router
 from app.realtime.pool import start_websocket_pool, stop_websocket_pool
-from app.realtime.router import router as realtime_router
 from app.realtime.state import RealtimeStateStore
 
 @asynccontextmanager
@@ -24,7 +23,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="QIDI Print Farm Orchestration Service", lifespan=lifespan)
 app.include_router(printers_router)
-app.include_router(realtime_router)
 
 @app.get("/")
 def read_root() -> dict:
