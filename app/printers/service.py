@@ -33,6 +33,17 @@ sau này thật sự gọi lại `resolve_driver` với `firmware_version` đã 
 Driver không bao giờ chạm DB (CLAUDE.md nguyên tắc #2, D-006) — mọi
 INSERT/SELECT ở đây, KHÔNG nằm trong `app/drivers/`.
 
+Luồng `update_printer`/`delete_printer` (E1-3/C1) — xem
+`docs/State_E1-3_v2.md` mục "Quyết định phạm vi chốt tại chunk C0" cho
+rationale đầy đủ (không lặp lại ở đây): KHÔNG gọi `resolve_driver`/
+Moonraker nào cả (sửa/xoá thông tin mô tả thuần tuý trong DB, khác
+`register_printer`/`list_printers`). `delete_printer` KHÔNG dùng
+exception cho nhánh nghiệp vụ "có job active" (dự kiến trước, không
+phải lỗi validate input như `PrinterConnectionError`/
+`PrinterAlreadyExistsError`) — trả về 1 trong 4 giá trị dạng chuỗi rõ
+nghĩa (`"deleted"`/`"not_found"`/`"has_active_job"`/
+`"has_related_records"`) để router tự map status code.
+
 Luồng `list_printers` (E1-2/C1) — poll-on-request qua HTTP, xem
 `docs/State_E1-2_v2.md` mục "Quyết định phạm vi chốt tại chunk C0" cho
 rationale đầy đủ (kênh WS bền/push thật để dành E2-1, KHÔNG lặp lại ở
@@ -63,7 +74,11 @@ from typing import List, Optional
 from app.db.migrate import DEFAULT_DB_PATH
 from app.drivers import resolve_driver
 from app.moonraker.http_client import MoonrakerClientError
-from app.printers.schemas import PrinterCreateRequest, PrinterResponse
+from app.printers.schemas import (
+    PrinterCreateRequest,
+    PrinterResponse,
+    PrinterUpdateRequest,
+)
 
 _INSERT_PRINTER_SQL = """
 INSERT INTO printers (
@@ -192,6 +207,91 @@ def list_printers(db_path: str = DEFAULT_DB_PATH) -> List[PrinterResponse]:
         connection.close()
 
     return responses
+
+def update_printer(
+    printer_id: int,
+    request: PrinterUpdateRequest,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[PrinterResponse]:
+    """Sửa `name`/`model`/`api_key` của 1 máy đã đăng ký (E1-3/C1). Trả
+    `None` nếu không tìm thấy `printer_id` (tầng router map sang HTTP
+    404). Body rỗng (`exclude_unset=True` trả dict rỗng) là no-op hợp
+    lệ — trả `200` + dữ liệu hiện tại, KHÔNG đụng `updated_at`.
+
+    Dùng `request.model_dump(exclude_unset=True)` để build câu `UPDATE`
+    chỉ với field thật sự được truyền (kể cả truyền `null` tường
+    minh) — tên field của `PrinterUpdateRequest` khớp trực tiếp tên
+    cột `printers` nên dùng thẳng làm tên cột trong câu `UPDATE` (an
+    toàn: keys bị giới hạn cứng bởi chính schema Pydantic, không phải
+    input tự do từ người dùng).
+    """
+    fields = request.model_dump(exclude_unset=True)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        existing = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+        if existing is None:
+            return None
+
+        if fields:
+            set_clauses = ", ".join(f"{column} = ?" for column in fields)
+            update_sql = (
+                f"UPDATE printers SET {set_clauses}, "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                "WHERE id = ?"
+            )
+            connection.execute(update_sql, (*fields.values(), printer_id))
+            connection.commit()
+            row = connection.execute(
+                _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+            ).fetchone()
+        else:
+            row = existing
+    finally:
+        connection.close()
+
+    return _row_to_response(row)
+
+def delete_printer(printer_id: int, db_path: str = DEFAULT_DB_PATH) -> str:
+    """Xoá cứng (hard delete) 1 máy in (E1-3/C1). Trả về 1 trong 4 giá
+    trị (xem docstring module này):
+    - `"deleted"`: xoá thành công.
+    - `"not_found"`: không có `printer_id` này (router map 404).
+    - `"has_active_job"`: `status` đang `PRINTING`/`PAUSED` (định nghĩa
+      "có job active" đã chốt ở D-013/D-010) — chặn xoá (router map
+      409), không xoá.
+    - `"has_related_records"`: `PRAGMA foreign_keys = ON` khiến
+      `DELETE` raise `sqlite3.IntegrityError` vì còn dòng `jobs`/
+      `job_history` tham chiếu `printer_id` này — lớp bảo vệ bổ sung
+      (bảng `jobs` luôn rỗng ở giai đoạn hiện tại, Epic 4 chưa triển
+      khai) (router map 409).
+    """
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(
+            "SELECT status FROM printers WHERE id = ?", (printer_id,)
+        ).fetchone()
+        if row is None:
+            return "not_found"
+
+        (current_status,) = row
+        if current_status in ("PRINTING", "PAUSED"):
+            return "has_active_job"
+
+        try:
+            connection.execute("DELETE FROM printers WHERE id = ?", (printer_id,))
+            connection.commit()
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            return "has_related_records"
+    finally:
+        connection.close()
+
+    return "deleted"
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)

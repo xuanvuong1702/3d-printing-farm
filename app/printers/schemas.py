@@ -35,6 +35,25 @@ class PrinterCreateRequest(BaseModel):
     model: Optional[str] = None
     api_key: Optional[str] = None
 
+class PrinterUpdateRequest(BaseModel):
+    """Body của `PATCH /printers/{printer_id}` (E1-3/C1) — chỉ 3 field
+    được phép sửa: `name`/`model`/`api_key` (xem `docs/State_E1-3_v2.md`
+    mục "Quyết định phạm vi chốt tại chunk C0", điểm 2). KHÔNG cho sửa
+    `ip`/`moonraker_port` (khoá định danh máy, đổi = "trỏ sang máy vật
+    lý khác", ngoài phạm vi story) hay các field do service/driver tự
+    cập nhật (`moonraker_version`/`klipper_version`/`capabilities`/
+    `status`/`is_held`).
+
+    Tầng service dùng `model_dump(exclude_unset=True)` để phân biệt
+    "không truyền field" (giữ nguyên) với "truyền `null` tường minh"
+    (xoá giá trị hiện có về `NULL` — áp dụng được vì `model`/`api_key`
+    đều nullable ở DDL, `app/db/schema.py`).
+    """
+
+    name: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+
 class PrinterResponse(BaseModel):
     """Phản chiếu 1 dòng của bảng `printers` sau khi đăng ký thành công."""
 
