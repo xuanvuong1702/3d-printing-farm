@@ -15,6 +15,12 @@ class PrinterCreateRequest(BaseModel):
     model: Optional[str] = None
     api_key: Optional[str] = None
 
+class PrinterUpdateRequest(BaseModel):
+
+    name: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+
 class PrinterResponse(BaseModel):
 
     id: int

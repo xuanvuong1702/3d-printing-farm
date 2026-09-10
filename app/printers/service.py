@@ -8,7 +8,11 @@ from typing import List, Optional
 from app.db.migrate import DEFAULT_DB_PATH
 from app.drivers import resolve_driver
 from app.moonraker.http_client import MoonrakerClientError
-from app.printers.schemas import PrinterCreateRequest, PrinterResponse
+from app.printers.schemas import (
+    PrinterCreateRequest,
+    PrinterResponse,
+    PrinterUpdateRequest,
+)
 
 _INSERT_PRINTER_SQL = """
 INSERT INTO printers (
@@ -131,6 +135,66 @@ def list_printers(db_path: str = DEFAULT_DB_PATH) -> List[PrinterResponse]:
         connection.close()
 
     return responses
+
+def update_printer(
+    printer_id: int,
+    request: PrinterUpdateRequest,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[PrinterResponse]:
+    fields = request.model_dump(exclude_unset=True)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        existing = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+        if existing is None:
+            return None
+
+        if fields:
+            set_clauses = ", ".join(f"{column} = ?" for column in fields)
+            update_sql = (
+                f"UPDATE printers SET {set_clauses}, "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                "WHERE id = ?"
+            )
+            connection.execute(update_sql, (*fields.values(), printer_id))
+            connection.commit()
+            row = connection.execute(
+                _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+            ).fetchone()
+        else:
+            row = existing
+    finally:
+        connection.close()
+
+    return _row_to_response(row)
+
+def delete_printer(printer_id: int, db_path: str = DEFAULT_DB_PATH) -> str:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(
+            "SELECT status FROM printers WHERE id = ?", (printer_id,)
+        ).fetchone()
+        if row is None:
+            return "not_found"
+
+        (current_status,) = row
+        if current_status in ("PRINTING", "PAUSED"):
+            return "has_active_job"
+
+        try:
+            connection.execute("DELETE FROM printers WHERE id = ?", (printer_id,))
+            connection.commit()
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            return "has_related_records"
+    finally:
+        connection.close()
+
+    return "deleted"
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
