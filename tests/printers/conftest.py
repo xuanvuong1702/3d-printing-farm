@@ -1,5 +1,5 @@
 """
-Fixture dùng chung cho `tests/printers/` (E1-1/C2).
+Fixture dùng chung cho `tests/printers/` (E1-1/C2, E1-2/C2).
 
 Đặt fixture riêng ở đây thay vì import lại từ `tests.drivers.conftest`
 — file đó thuộc story E0-6 đã khoá, không phải nơi để tầng khác import
@@ -7,10 +7,13 @@ fixture dùng chung; tạo `conftest.py` mới trong package test của chính
 story này (E1-1) là cách chuẩn của pytest, đúng tiền lệ E0-6/C3 (khi
 đó cũng không import lại từ `tests/moonraker_simulator/`).
 
-2 fixture:
+Fixture (3 fixture gốc từ E1-1/C2, giữ nguyên không sửa; 1 fixture mới
+thêm ở E1-2/C2):
 - `simulator`: y hệt pattern của `tests/drivers/conftest.py` — khởi
   động 1 instance Moonraker simulator thật trên cổng ngẫu nhiên trong
   1 thread nền cho mỗi test, trả về port đã bind.
+- `simulator_on_default_port`: giống `simulator` nhưng bind đúng
+  `DEFAULT_MOONRAKER_PORT` (7125).
 - `client`: `TestClient` bọc `app.main.app`, đã monkeypatch
   `app.printers.router.register_printer` để dùng DB file tạm
   (`run_migrations(tmp_path)`) thay vì `DEFAULT_DB_PATH` — không sửa
@@ -19,6 +22,23 @@ story này (E1-1) là cách chuẩn của pytest, đúng tiền lệ E0-6/C3 (kh
   tầng test qua `monkeypatch.setattr` trên module `router`, đúng cách
   C1 đã thiết kế sẵn tham số `db_path` cho mục đích test injection —
   xem `docs/State_E1-1_v3.md` mục "Chunk plan" C2).
+- `simulator_factory` (E1-2/C2, MỚI): factory fixture trả về 1 hàm
+  `start(host=...) -> SimulatorHandle` (`SimulatorHandle` có `.port` và
+  `.stop()`), cho phép khởi động NHIỀU simulator trên các host khác
+  nhau trong CÙNG 1 test, và tắt (`.stop()`) từng simulator giữa
+  chừng — khác với `simulator`/`simulator_on_default_port` (chỉ tắt lúc
+  fixture teardown, không thao túng được từ trong thân test). Cần cho
+  2 case của `GET /printers` (E1-2): (a) mô phỏng 1 máy chuyển từ
+  online sang offline giữa chừng test, (b) 2+ máy online đồng thời
+  trên 2+ địa chỉ loopback khác nhau (bắt buộc vì cột `printers.ip` có
+  `UNIQUE` constraint, không phải `(ip, port)` — không thể đăng ký 2
+  máy cùng 1 IP dù khác port, xem `docs/Story_E1-2.md` mục "Cách chạy/
+  kiểm chứng" chunk C1). Mọi simulator do factory này khởi động đều
+  chạy chung 1 `simulator_app.app` (module-level) nên chia sẻ chung 1
+  `simulator_app.state` — không phải vấn đề cho các test dùng fixture
+  này, vì các test đó chỉ cần phân biệt "có simulator đang lắng nghe
+  hay không" (online/offline), không cần state in/pause khác nhau
+  giữa các máy chạy đồng thời.
 """
 
 from __future__ import annotations
@@ -26,7 +46,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from typing import Iterator
+from dataclasses import dataclass
+from typing import Callable, Iterator, List
 
 import pytest
 import uvicorn
@@ -149,3 +170,64 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
     with TestClient(main_module.app) as test_client:
         yield test_client
+
+@dataclass
+class SimulatorHandle:
+    """1 instance simulator đã khởi động qua `simulator_factory` — `stop()`
+    tắt được ngay trong thân test, không phải đợi tới lúc fixture teardown."""
+
+    host: str
+    port: int
+    stop: Callable[[], None]
+
+@pytest.fixture()
+def simulator_factory() -> Iterator[Callable[..., SimulatorHandle]]:
+    """
+    Factory (E1-2/C2) — gọi `start(host="127.0.0.1")` để khởi động 1
+    simulator mới, nhận lại `SimulatorHandle` (`.port`, `.stop()`). Có
+    thể gọi nhiều lần trong cùng 1 test (với `host` khác nhau) để chạy
+    nhiều simulator đồng thời. Mọi handle chưa `.stop()` thủ công trong
+    thân test đều được tắt tự động lúc fixture teardown (tránh port/
+    thread rò rỉ giữa các test).
+    """
+    handles: List[SimulatorHandle] = []
+
+    def _start(host: str = SIMULATOR_HOST) -> SimulatorHandle:
+        simulator_app.state = SimulatorState()
+
+        config = uvicorn.Config(
+            simulator_app.app, host=host, port=0, log_level="warning"
+        )
+        server = uvicorn.Server(config)
+        thread = _ServerThread(server)
+        thread.start()
+
+        deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
+        while not server.started:
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"Simulator không khởi động kịp trong "
+                    f"{_STARTUP_TIMEOUT_SECONDS}s"
+                )
+            time.sleep(_STARTUP_POLL_INTERVAL_SECONDS)
+
+        port = server.servers[0].sockets[0].getsockname()[1]
+        stopped = False
+
+        def _stop() -> None:
+            nonlocal stopped
+            if stopped:
+                return
+            stopped = True
+            server.should_exit = True
+            thread.join(timeout=_STARTUP_TIMEOUT_SECONDS)
+
+        handle = SimulatorHandle(host=host, port=port, stop=_stop)
+        handles.append(handle)
+        return handle
+
+    try:
+        yield _start
+    finally:
+        for handle in handles:
+            handle.stop()
