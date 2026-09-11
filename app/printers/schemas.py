@@ -23,6 +23,22 @@ tầng client, và `is_held` (INTEGER 0/1 trong DB) thành `bool`.
 cùng tên (E3-3/C1) — `None` nghĩa là máy CHƯA cấu hình tên device
 Power API (khác hẳn trường hợp máy không có capability `power`, xem
 `capabilities`).
+
+`JobResponse` (E4-1/C3) — response của `POST /printers/{printer_id}/
+files` (route cùng chunk, `app/printers/router.py`). Đúng 7 field theo
+"Quyết định phạm vi" điểm 7 (`docs/State_E4-1_v4.md`): `id`,
+`printer_id`, `filename`, `status`, `file_size_bytes`,
+`estimated_print_seconds`, `created_at` — KHÔNG có `priority`/
+`updated_at` dù `dict` trả về từ `_job_row_to_dict`
+(`app/printers/service.py`, C2) có cả 2 field đó, vì AC gốc E4-1 không
+yêu cầu và tránh phình response không cần thiết (nguyên tắc không tự
+mở rộng phạm vi, "Quyết định phạm vi" điểm 5). Router chỉ cần
+`JobResponse(**job_dict)` — Pydantic tự bỏ qua field thừa không khai
+báo trong model (hành vi mặc định `extra="ignore"`), không cần lọc
+tay. `status` trả nguyên giá trị canonical từ DB (D-013), không map
+lại. `file_size_bytes`/`estimated_print_seconds` nullable vì job vừa
+tạo có thể đang ở `status='failed'` trước khi metadata được điền
+(xem `upload_file_to_printer`, C2).
 """
 
 from __future__ import annotations
@@ -98,3 +114,16 @@ class PrinterResponse(BaseModel):
     is_held: bool
     created_at: str
     updated_at: str
+
+class JobResponse(BaseModel):
+    """Phản chiếu bản ghi `jobs` vừa tạo sau khi upload file thành công
+    (E4-1/C3, AC gốc E4-1 — hiển thị metadata upload). KHÔNG bao gồm
+    `priority`/`updated_at` — xem docstring module này."""
+
+    id: int
+    printer_id: int
+    filename: str
+    status: str
+    file_size_bytes: Optional[int] = None
+    estimated_print_seconds: Optional[int] = None
+    created_at: str

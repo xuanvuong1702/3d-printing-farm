@@ -56,6 +56,24 @@ gì thêm trong body). `None` → `404`; `PrinterNotHeldError` (máy hiện
 `is_held = 0`, không có gì để xác nhận) → `409 Conflict`. Xem
 `docs/State_E3-4_v2.md` mục "Quyết định phạm vi" #6 cho rationale đầy
 đủ.
+
+`POST /printers/{printer_id}/files` (E4-1/C3) — upload file G-code
+(đã cắt lớp sẵn) lên máy `printer_id`, KHÔNG in ngay (khác
+`/print/start`, E3-1 — endpoint đó upload + in ngay; endpoint này chỉ
+lưu file + tạo job `queued`, xem `app/printers/service.py::
+upload_file_to_printer`, C2). Đặt tên số nhiều "files" (không phải
+"upload") để khớp danh từ tài nguyên con của `/printers/{printer_id}/
+...` và khớp Moonraker (`/server/files/upload`) — xem
+`docs/State_E4-1_v4.md` mục "Quyết định phạm vi" điểm 6. Multipart
+form-data, field `file` (cùng kiểu tham số `UploadFile`/`File(...)`
+đã dùng ở `/print/start`). `UnsupportedFileTypeError` (không phải
+`.gcode`) → `415 Unsupported Media Type`; `None` → `404` (cùng tiền
+lệ); `PrinterCommandError` (lỗi Moonraker khi upload/lấy metadata) →
+`502 Bad Gateway` (cùng tiền lệ 4 route `/print/`). Thành công trả
+`JobResponse` mới, status code `201 Created` (cùng tiền lệ
+`POST /printers`, E1-1 — hành động tạo mới, khác `200` của các route
+điều khiển/PATCH). Xem `docs/State_E4-1_v4.md` mục "Quyết định phạm
+vi" điểm 6-7 cho rationale đầy đủ.
 """
 
 from __future__ import annotations
@@ -66,6 +84,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
     EmergencyStopRequest,
+    JobResponse,
     PrinterCreateRequest,
     PrinterResponse,
     PrinterUpdateRequest,
@@ -77,6 +96,7 @@ from app.printers.service import (
     PrinterNotHeldError,
     PrinterPowerNotConfiguredError,
     PrinterPowerNotSupportedError,
+    UnsupportedFileTypeError,
     cancel_print,
     confirm_printer,
     delete_printer,
@@ -89,6 +109,7 @@ from app.printers.service import (
     resume_print,
     start_print,
     update_printer,
+    upload_file_to_printer,
 )
 
 router = APIRouter()
@@ -286,3 +307,27 @@ def power_off_printer_endpoint(printer_id: int) -> PrinterResponse:
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
         )
     return result
+
+@router.post(
+    "/printers/{printer_id}/files",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_printer_file(
+    printer_id: int, file: UploadFile = File(...)
+) -> JobResponse:
+    """Upload file G-code (đã cắt lớp sẵn) lên máy `printer_id`, KHÔNG
+    in ngay (AC gốc E4-1 — xem docstring module này/`docs/State_E4-1_v4.md`
+    mục "Quyết định phạm vi" điểm 6-7 cho rationale đầy đủ)."""
+    file_content = await file.read()
+    try:
+        result = upload_file_to_printer(printer_id, file.filename, file_content)
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return JobResponse(**result)
