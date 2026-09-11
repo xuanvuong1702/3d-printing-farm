@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
@@ -19,3 +19,5 @@ class SimulatorState:
     extruder_target: float = 0.0
     heater_bed_temperature: float = 25.0
     heater_bed_target: float = 0.0
+
+    power_devices: dict[str, str] = field(default_factory=lambda: {"printer": "off"})

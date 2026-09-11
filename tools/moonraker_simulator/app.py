@@ -6,8 +6,14 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from tools.moonraker_simulator.state import SimulatorState
+
+class DevicePowerRequest(BaseModel):
+
+    device: str
+    action: str
 
 app = FastAPI(title="QIDI Moonraker Simulator")
 
@@ -124,6 +130,15 @@ def resume_print() -> dict:
 def emergency_stop() -> dict:
     state.webhooks_state = "shutdown"
     return {"result": "ok"}
+
+@app.post("/machine/device_power/device")
+def set_device_power(body: DevicePowerRequest) -> dict:
+    state.power_devices[body.device] = body.action
+    return {body.device: state.power_devices[body.device]}
+
+@app.get("/machine/device_power/device")
+def get_device_power(device: str) -> dict:
+    return {device: state.power_devices.get(device, "off")}
 
 _WS_BROADCAST_POLL_INTERVAL_SECONDS = 0.05
 
