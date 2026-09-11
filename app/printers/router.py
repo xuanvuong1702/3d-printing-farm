@@ -15,11 +15,15 @@ from app.printers.service import (
     PrinterAlreadyExistsError,
     PrinterCommandError,
     PrinterConnectionError,
+    PrinterPowerNotConfiguredError,
+    PrinterPowerNotSupportedError,
     cancel_print,
     delete_printer,
     emergency_stop_printer,
     list_printers,
     pause_print,
+    power_off_printer,
+    power_on_printer,
     register_printer,
     resume_print,
     start_print,
@@ -135,6 +139,34 @@ def emergency_stop_printer_endpoint(
         )
     try:
         result = emergency_stop_printer(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/power/on", response_model=PrinterResponse)
+def power_on_printer_endpoint(printer_id: int) -> PrinterResponse:
+    try:
+        result = power_on_printer(printer_id)
+    except (PrinterPowerNotSupportedError, PrinterPowerNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/power/off", response_model=PrinterResponse)
+def power_off_printer_endpoint(printer_id: int) -> PrinterResponse:
+    try:
+        result = power_off_printer(printer_id)
+    except (PrinterPowerNotSupportedError, PrinterPowerNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result is None:

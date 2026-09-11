@@ -20,6 +20,7 @@ class PrinterUpdateRequest(BaseModel):
     name: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+    power_device_name: Optional[str] = None
 
 class EmergencyStopRequest(BaseModel):
 
@@ -36,6 +37,7 @@ class PrinterResponse(BaseModel):
     moonraker_version: Optional[str] = None
     klipper_version: Optional[str] = None
     capabilities: List[str] = Field(default_factory=list)
+    power_device_name: Optional[str] = None
     status: str
     is_held: bool
     created_at: str

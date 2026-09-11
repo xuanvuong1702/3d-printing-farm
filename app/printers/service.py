@@ -24,7 +24,7 @@ INSERT INTO printers (
 _SELECT_PRINTER_BY_ID_SQL = """
 SELECT id, name, ip, moonraker_port, model, api_key,
        moonraker_version, klipper_version, capabilities,
-       status, is_held, created_at, updated_at
+       power_device_name, status, is_held, created_at, updated_at
 FROM printers WHERE id = ?
 """
 
@@ -46,6 +46,12 @@ class PrinterAlreadyExistsError(Exception):
     pass
 
 class PrinterCommandError(Exception):
+    pass
+
+class PrinterPowerNotSupportedError(Exception):
+    pass
+
+class PrinterPowerNotConfiguredError(Exception):
     pass
 
 def register_printer(
@@ -210,6 +216,7 @@ def _resolve_driver_for_row(row: tuple):
         _moonraker_version,
         klipper_version,
         _capabilities_json,
+        _power_device_name,
         _status,
         _is_held,
         _created_at,
@@ -286,6 +293,67 @@ def emergency_stop_printer(
         printer_id, db_path, lambda driver: driver.emergency_stop()
     )
 
+def _run_power_command(
+    printer_id: int, action: str, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        capabilities_json = row[8]
+        power_device_name = row[9]
+        capabilities: List[str] = json.loads(capabilities_json)
+        if "power" not in capabilities:
+            raise PrinterPowerNotSupportedError(
+                f"Máy id={printer_id} không có capability 'power', không hỗ trợ "
+                "bật/tắt nguồn từ xa."
+            )
+        if power_device_name is None:
+            raise PrinterPowerNotConfiguredError(
+                f"Máy id={printer_id} có capability 'power' nhưng chưa cấu hình "
+                "power_device_name (PATCH /printers/{printer_id})."
+            )
+
+        driver = _resolve_driver_for_row(row)
+        try:
+            driver.set_power(power_device_name, action)
+        except MoonrakerClientError as exc:
+            raise PrinterCommandError(
+                f"Lỗi khi gọi lệnh Power API trên máy id={printer_id}: {exc}"
+            ) from exc
+
+        if action == "off":
+            try:
+                canonical_status = driver.get_status().canonical_status
+            except MoonrakerClientError:
+
+                canonical_status = "OFFLINE"
+        else:
+            canonical_status = driver.get_status().canonical_status
+
+        connection.execute(_UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
+
+def power_on_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_power_command(printer_id, "on", db_path)
+
+def power_off_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_power_command(printer_id, "off", db_path)
+
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
         id_,
@@ -297,6 +365,7 @@ def _row_to_response(row: tuple) -> PrinterResponse:
         moonraker_version,
         klipper_version,
         capabilities_json,
+        power_device_name,
         status,
         is_held,
         created_at,
@@ -312,6 +381,7 @@ def _row_to_response(row: tuple) -> PrinterResponse:
         moonraker_version=moonraker_version,
         klipper_version=klipper_version,
         capabilities=json.loads(capabilities_json),
+        power_device_name=power_device_name,
         status=status,
         is_held=bool(is_held),
         created_at=created_at,
