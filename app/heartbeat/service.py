@@ -60,6 +60,16 @@ Không đụng `app/printers/service.py`/`router.py` (đã khoá - Quyết đị
 6): `list_printers` giữ nguyên hành vi poll-on-request hiện có, không
 đọc/ghi 2 cột mới, không bị ảnh hưởng bởi backoff của heartbeat
 scheduler.
+
+Phạm vi chunk E3-4/C1 (chunk này - xem `docs/State_E3-4_v1.md` mục
+"Quyết định phạm vi" điểm 1-5 cho rationale đầy đủ): CHỈ thêm hàm thuần
+`compute_updated_is_held` tính lại `printers.is_held` (D-010) dựa trên
+`old_status`/`new_status`/`is_held` cũ/`filename` hiện có. Hàm này CHƯA
+được gọi ở đâu cả (chưa wiring vào `run_heartbeat_cycle`, chưa đọc/ghi
+cột `is_held` trong SQL) - việc đó thuộc chunk C2. `run_heartbeat_cycle`
+ở chunk này giữ NGUYÊN VẸN hành vi hiện có (đã khoá từ E1-4), không sửa
+gì trong hàm đó hay 2 câu SQL `_SELECT_DUE_PRINTERS_SQL`/
+`_UPDATE_HEARTBEAT_RESULT_SQL`.
 """
 
 from __future__ import annotations
@@ -77,6 +87,10 @@ DEFAULT_BACKOFF_MULTIPLIER = 2.0
 DEFAULT_BACKOFF_MAX_SECONDS = 300.0
 
 _OFFLINE_STATUS = "OFFLINE"
+
+_HOLD_TRIGGER_STATUSES = frozenset({"FINISHED", "ERROR"})
+
+_HOLD_AUTO_CLEAR_STATUS = "PRINTING"
 
 _SELECT_DUE_PRINTERS_SQL = """
 SELECT id, ip, moonraker_port, model, api_key, klipper_version,
@@ -107,6 +121,51 @@ def _compute_backoff_interval_seconds(consecutive_failures: int) -> float:
         DEFAULT_BACKOFF_MULTIPLIER**consecutive_failures
     )
     return min(interval, DEFAULT_BACKOFF_MAX_SECONDS)
+
+def compute_updated_is_held(
+    *,
+    old_status: str,
+    new_status: str,
+    is_held: bool,
+    filename: "str | None",
+) -> bool:
+    """Tính lại `printers.is_held` (D-010) cho 1 máy tại 1 vòng heartbeat
+    (E3-4/C1) - xem `docs/State_E3-4_v1.md` mục "Quyết định phạm vi"
+    điểm 2-5 cho rationale đầy đủ. Hàm THUẦN - không đụng DB/HTTP, chỉ
+    tính giá trị mới từ input đã có sẵn tại vòng heartbeat đó (wiring
+    vào `run_heartbeat_cycle`, đọc `is_held` cũ + ghi lại giá trị mới,
+    thuộc chunk C2 - KHÔNG làm ở đây).
+
+    - Nếu `is_held` hiện tại là `False`: set `True` khi và chỉ khi CẢ
+      3 điều kiện đều đúng:
+      1. Có một **chuyển trạng thái thật** (`new_status != old_status`)
+         - tránh set lặp lại mỗi vòng heartbeat kế tiếp khi máy đứng
+         yên ở `FINISHED`/`ERROR` nhiều lượt liền (chưa có gì thay đổi
+         thật so với lần trước, không phải một sự kiện "chuyển" mới).
+      2. `new_status` thuộc `_HOLD_TRIGGER_STATUSES` (`FINISHED`/
+         `ERROR`, điểm 3 - đúng 2 giá trị AC gốc E3-4 nêu, không mở
+         rộng thêm).
+      3. Máy đang có job active tại thời điểm đó (điểm 2 - suy ra từ
+         `filename is not None`, KHÔNG dùng bảng `jobs` vì bảng đó
+         luôn rỗng do Epic 4 chưa triển khai).
+    - Nếu `is_held` hiện tại là `True`: CHỈ tự gỡ về `False` khi phát
+      hiện đúng ngoại lệ whitelist DUY NHẤT (điểm 5, nguyên tắc #1
+      `CLAUDE.md`): `new_status == _HOLD_AUTO_CLEAR_STATUS` ("PRINTING")
+      VÀ `filename is not None` (máy đã hồi phục về đang in với job
+      thật - false alarm do rớt mạng thoáng qua). Mọi trường hợp khác
+      giữ nguyên `True` - endpoint xác nhận vận hành viên (chunk C3,
+      điểm 6) là đường DUY NHẤT khác được phép gỡ `is_held`.
+    """
+    if is_held:
+        auto_recovered = (
+            new_status == _HOLD_AUTO_CLEAR_STATUS and filename is not None
+        )
+        return not auto_recovered
+
+    is_real_transition = new_status != old_status
+    reached_hold_status = new_status in _HOLD_TRIGGER_STATUSES
+    has_active_job = filename is not None
+    return is_real_transition and reached_hold_status and has_active_job
 
 def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
     """Chạy 1 vòng heartbeat cho tất cả máy đủ điều kiện
