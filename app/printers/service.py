@@ -63,6 +63,19 @@ rationale đầy đủ (kênh WS bền/push thật để dành E2-1, KHÔNG lặ
 4. Ghi đè (UPDATE) cột `status` (+ `updated_at`, cột này KHÔNG có
    trigger tự động ở DDL, `app/db/schema.py`) trước khi trả response —
    write-through, D-013 "canonical status" là nguồn sự thật chung.
+
+Luồng `start_print`/`pause_print`/`resume_print`/`cancel_print`
+(E3-1/C1) — xem `docs/State_E3-1_v2.md` mục "Quyết định phạm vi" cho
+rationale đầy đủ (không lặp lại ở đây): mỗi hàm SELECT thông tin kết
+nối máy theo `printer_id` (tái dùng `_SELECT_PRINTER_BY_ID_SQL`), trả
+`None` nếu không tìm thấy (cùng pattern `update_printer`);
+`resolve_driver(model, firmware_version=klipper_version đã lưu, host,
+port, api_key)` (D-012, tái dùng nguyên cơ chế đã khoá từ E0-6); gọi
+đúng method driver tương ứng. `MoonrakerClientError` từ lệnh gọi đó →
+raise `PrinterCommandError` (tầng router map sang HTTP 502). Thành
+công → đọc lại `driver.get_status().canonical_status`, UPDATE
+`printers.status`, SELECT lại, trả `_row_to_response(row)` — tái dùng
+đúng pattern write-through đã có ở `list_printers`.
 """
 
 from __future__ import annotations
@@ -110,6 +123,11 @@ class PrinterConnectionError(Exception):
 
 class PrinterAlreadyExistsError(Exception):
     """IP đã được đăng ký trước đó (UNIQUE constraint của bảng `printers`)."""
+
+class PrinterCommandError(Exception):
+    """Lỗi khi gọi lệnh điều khiển job (start/pause/resume/cancel) qua
+    driver xuống Moonraker của máy đích — bọc lại `MoonrakerClientError`
+    (E3-1/C1, tầng router map sang HTTP 502 Bad Gateway)."""
 
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
@@ -292,6 +310,108 @@ def delete_printer(printer_id: int, db_path: str = DEFAULT_DB_PATH) -> str:
         connection.close()
 
     return "deleted"
+
+def _resolve_driver_for_row(row: tuple):
+    """Dựng driver cho 1 máy từ dòng `_SELECT_PRINTER_BY_ID_SQL` (E3-1/C1)
+    — tái dùng đúng cơ chế `resolve_driver` (D-012) đã dùng ở
+    `list_printers`, truyền `firmware_version=klipper_version` đã lưu."""
+    (
+        _id,
+        _name,
+        ip,
+        moonraker_port,
+        model,
+        api_key,
+        _moonraker_version,
+        klipper_version,
+        _capabilities_json,
+        _status,
+        _is_held,
+        _created_at,
+        _updated_at,
+    ) = row
+    return resolve_driver(
+        model=model,
+        firmware_version=klipper_version,
+        host=ip,
+        port=moonraker_port,
+        api_key=api_key,
+    )
+
+def _run_print_command(
+    printer_id: int, db_path: str, command
+) -> Optional[PrinterResponse]:
+    """Khung dùng chung cho 4 hàm điều khiển job (E3-1/C1): SELECT máy
+    theo `printer_id` (trả `None` nếu không có, router map 404), dựng
+    driver, gọi `command(driver)` — bắt `MoonrakerClientError` raise
+    `PrinterCommandError` (router map 502) — rồi đọc lại status, UPDATE
+    DB, trả `PrinterResponse` (write-through, cùng pattern
+    `list_printers`)."""
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        driver = _resolve_driver_for_row(row)
+        try:
+            command(driver)
+            canonical_status = driver.get_status().canonical_status
+        except MoonrakerClientError as exc:
+            raise PrinterCommandError(
+                f"Lỗi khi gọi lệnh điều khiển job trên máy id={printer_id}: {exc}"
+            ) from exc
+
+        connection.execute(_UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
+
+def start_print(
+    printer_id: int,
+    filename: str,
+    file_content: bytes,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[PrinterResponse]:
+    """Upload G-code + in ngay trên máy `printer_id` (E3-1/C1, AC "start").
+    Trả `None` nếu không tìm thấy `printer_id`. Raise `PrinterCommandError`
+    nếu Moonraker của máy đích lỗi/mất kết nối khi gọi lệnh."""
+    return _run_print_command(
+        printer_id,
+        db_path,
+        lambda driver: driver.upload_and_print(filename, file_content),
+    )
+
+def pause_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Tạm dừng job đang in trên máy `printer_id` (E3-1/C1, AC "pause").
+    Trả `None` nếu không tìm thấy `printer_id`. Raise `PrinterCommandError`
+    nếu Moonraker của máy đích lỗi/mất kết nối khi gọi lệnh."""
+    return _run_print_command(printer_id, db_path, lambda driver: driver.pause_job())
+
+def resume_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Tiếp tục job đang tạm dừng trên máy `printer_id` (E3-1/C1, AC
+    "resume"). Trả `None` nếu không tìm thấy `printer_id`. Raise
+    `PrinterCommandError` nếu Moonraker của máy đích lỗi/mất kết nối khi
+    gọi lệnh."""
+    return _run_print_command(printer_id, db_path, lambda driver: driver.resume_job())
+
+def cancel_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Huỷ job đang in trên máy `printer_id` (E3-1/C1, AC "cancel"). Trả
+    `None` nếu không tìm thấy `printer_id`. Raise `PrinterCommandError`
+    nếu Moonraker của máy đích lỗi/mất kết nối khi gọi lệnh."""
+    return _run_print_command(printer_id, db_path, lambda driver: driver.cancel_job())
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)
