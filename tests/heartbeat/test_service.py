@@ -25,12 +25,24 @@ lần lỗi đầu tiên (n=1) cho `30.0 * 2.0**1 = 60.0s`, KHÔNG phải
 định "chưa backoff" một cách lỏng lẻo), và giá trị này nhất quán với
 điểm dữ liệu đã xác nhận ở kịch bản tạm C2 cho lần lỗi thứ 2
 (`30.0 * 2.0**2 = 120.0s`, xem `docs/Story_E1-4.md`).
+
+Bổ sung tại chunk E3-4/C2 (xem `docs/State_E3-4_v1.md` mục "CHUNK KẾ
+TIẾP CẦN CHẠY"): các test cuối file (nhóm `test_is_held_*`) kiểm chứng
+wiring `compute_updated_is_held` (đã có hàm thuần từ C1, test unit ở
+`tests/heartbeat/test_hold.py`) vào chính `run_heartbeat_cycle` — dùng
+simulator THẬT, mutate trực tiếp `print_stats_state`/
+`print_stats_filename` giữa 2 lần gọi liên tiếp để mô phỏng 1 "chuyển
+trạng thái" (simulator không tự đổi state theo thời gian, cùng kỹ
+thuật đã dùng ở `tests/realtime/test_connection.py`) — dùng fixture
+MỚI `fetch_is_held` (KHÔNG mở rộng arity của `fetch_printer` đã khoá,
+xem docstring `conftest.py`).
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import tools.moonraker_simulator.app as simulator_app
 from app.heartbeat.service import (
     DEFAULT_BACKOFF_MULTIPLIER,
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
@@ -177,3 +189,152 @@ def test_run_heartbeat_cycle_on_empty_table_does_not_raise(heartbeat_db_path):
     chừng" đã kiểm chứng tạm ở C3 - SELECT 0 dòng) -> chạy êm, không
     raise (`docs/Story_E1-4.md` mục "Cách chạy/kiểm chứng" chunk C3)."""
     run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+_PAST_ISO = "2000-01-01T00:00:00Z"
+
+def test_is_held_set_when_transition_to_finished_with_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    """Máy đang `PRINTING` (có `filename`) -> simulator chuyển sang
+    `complete` (canonical `FINISHED`), vẫn giữ nguyên `filename` -> đây
+    là 1 chuyển trạng thái thật, thuộc `_HOLD_TRIGGER_STATUSES`, có job
+    active -> `is_held` chuyển `0 -> 1` (điểm 2/3/4, `docs/
+    State_E3-4_v1.md`). Ép `next_heartbeat_at` về quá khứ giữa 2 lần
+    gọi (cùng kỹ thuật `test_consecutive_failures_apply_exponential_
+    backoff` ở trên) - lần gọi đầu đã đặt `next_heartbeat_at` = now +
+    30s nên nếu không ép, lần gọi thứ 2 sẽ bị `_SELECT_DUE_PRINTERS_SQL`
+    bỏ qua vì chưa tới lượt."""
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "complete"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "FINISHED"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_set_when_transition_to_error_with_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    """Tương tự test trên nhưng cho `error` (canonical `ERROR`) - đúng 2
+    giá trị AC gốc E3-4 nêu (điểm 3)."""
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "error"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "ERROR"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_not_set_when_finished_without_prior_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    """Máy đang `IDLE` (chưa từng in gì) -> simulator "nhảy" thẳng sang
+    `complete` (canonical `FINISHED`) mà KHÔNG đi qua `PRINTING`/
+    `PAUSED` trước đó -> `old_status` (`IDLE`) không thuộc
+    `ACTIVE_JOB_STATUSES` -> KHÔNG coi là "có job active tại thời điểm
+    chuyển trạng thái" -> `is_held` giữ `0` (điểm 2, đã sửa lại điều
+    kiện tại C2 - xem docstring `compute_updated_is_held` mục "Sửa tại
+    C2"; KHÔNG dùng bảng `jobs` do bảng đó luôn rỗng)."""
+    handle = simulator_factory(host="127.0.0.1")
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "IDLE"
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "complete"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "FINISHED"
+    assert fetch_is_held(printer_id) is False
+
+def test_is_held_auto_clears_on_recovery_to_printing_with_active_job(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    """Máy đang `is_held=1` (đã hold từ trước, chèn thẳng qua
+    `insert_printer(is_held=1)`) -> simulator đang `printing` với
+    `filename` thật ngay tại lần heartbeat đầu tiên -> ngoại lệ tự gỡ
+    DUY NHẤT (điểm 5, nguyên tắc #1 CLAUDE.md) áp dụng ngay, `is_held`
+    tự gỡ về `0` mà KHÔNG cần qua endpoint xác nhận (endpoint đó thuộc
+    chunk C3, chưa tồn tại ở chunk này)."""
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is False
+
+def test_is_held_stays_set_on_recovery_to_printing_without_active_job(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    """Máy đang `is_held=1` -> simulator hồi phục về `printing` nhưng
+    KHÔNG có `filename` (không phải job thật) -> KHÔNG khớp ngoại lệ
+    whitelist (điểm 5 yêu cầu `filename is not None`) -> `is_held` giữ
+    nguyên `1`."""
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_unchanged_when_printer_goes_offline(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    """Máy đang `is_held=1` -> simulator TẮT trước khi heartbeat chạy
+    (mất kết nối, `MoonrakerClientError` -> `OFFLINE`) -> `is_held` giữ
+    nguyên `1` - nhánh lỗi kết nối KHÔNG gọi `compute_updated_is_held`
+    (mất kết nối không phải sự kiện FINISHED/ERROR/PRINTING thật, xem
+    `docs/State_E3-4_v1.md` mục "CHUNK KẾ TIẾP CẦN CHẠY")."""
+    handle = simulator_factory(host="127.0.0.1")
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+    handle.stop()
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "OFFLINE"
+    assert fetch_is_held(printer_id) is True

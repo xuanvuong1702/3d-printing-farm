@@ -61,15 +61,21 @@ Không đụng `app/printers/service.py`/`router.py` (đã khoá - Quyết đị
 đọc/ghi 2 cột mới, không bị ảnh hưởng bởi backoff của heartbeat
 scheduler.
 
-Phạm vi chunk E3-4/C1 (chunk này - xem `docs/State_E3-4_v1.md` mục
-"Quyết định phạm vi" điểm 1-5 cho rationale đầy đủ): CHỈ thêm hàm thuần
-`compute_updated_is_held` tính lại `printers.is_held` (D-010) dựa trên
-`old_status`/`new_status`/`is_held` cũ/`filename` hiện có. Hàm này CHƯA
-được gọi ở đâu cả (chưa wiring vào `run_heartbeat_cycle`, chưa đọc/ghi
-cột `is_held` trong SQL) - việc đó thuộc chunk C2. `run_heartbeat_cycle`
-ở chunk này giữ NGUYÊN VẸN hành vi hiện có (đã khoá từ E1-4), không sửa
-gì trong hàm đó hay 2 câu SQL `_SELECT_DUE_PRINTERS_SQL`/
-`_UPDATE_HEARTBEAT_RESULT_SQL`.
+Phạm vi chunk E3-4/C1 (đã xong): thêm hàm thuần `compute_updated_is_held`
+tính lại `printers.is_held` (D-010) dựa trên `old_status`/`new_status`/
+`is_held` cũ/`filename` hiện có - hàm này lúc đó CHƯA được gọi ở đâu cả.
+
+Phạm vi chunk E3-4/C2 (chunk này - xem `docs/State_E3-4_v1.md` mục
+"CHUNK KẾ TIẾP CẦN CHẠY" cho rationale đầy đủ): wiring
+`compute_updated_is_held` vào `run_heartbeat_cycle` -
+`_SELECT_DUE_PRINTERS_SQL` lấy thêm `status` (giá trị cũ) + `is_held`;
+`_UPDATE_HEARTBEAT_RESULT_SQL` ghi thêm `is_held`. Chỉ áp dụng
+`compute_updated_is_held` ở nhánh THÀNH CÔNG (có `canonical_status` mới
+từ `driver.get_status()`) - nhánh lỗi kết nối (`MoonrakerClientError`
+-> `OFFLINE`) giữ nguyên `is_held` cũ (mất kết nối không phải sự kiện
+FINISHED/ERROR thật, và `OFFLINE` không phải `PRINTING` nên không kích
+hoạt ngoại lệ tự gỡ ở điểm 5) - không gọi `compute_updated_is_held` ở
+nhánh đó, tránh truyền `old_status`/`new_status` sai ngữ cảnh.
 """
 
 from __future__ import annotations
@@ -78,7 +84,7 @@ import sqlite3
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.drivers import resolve_driver
-from app.moonraker.http_client import MoonrakerClientError
+from app.moonraker.http_client import ACTIVE_JOB_STATUSES, MoonrakerClientError
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
@@ -94,7 +100,7 @@ _HOLD_AUTO_CLEAR_STATUS = "PRINTING"
 
 _SELECT_DUE_PRINTERS_SQL = """
 SELECT id, ip, moonraker_port, model, api_key, klipper_version,
-       consecutive_heartbeat_failures
+       consecutive_heartbeat_failures, status, is_held
 FROM printers
 WHERE next_heartbeat_at IS NULL OR next_heartbeat_at <= ?
 """
@@ -104,6 +110,7 @@ UPDATE printers
 SET status = ?,
     consecutive_heartbeat_failures = ?,
     next_heartbeat_at = ?,
+    is_held = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 """
@@ -130,11 +137,11 @@ def compute_updated_is_held(
     filename: "str | None",
 ) -> bool:
     """Tính lại `printers.is_held` (D-010) cho 1 máy tại 1 vòng heartbeat
-    (E3-4/C1) - xem `docs/State_E3-4_v1.md` mục "Quyết định phạm vi"
-    điểm 2-5 cho rationale đầy đủ. Hàm THUẦN - không đụng DB/HTTP, chỉ
-    tính giá trị mới từ input đã có sẵn tại vòng heartbeat đó (wiring
-    vào `run_heartbeat_cycle`, đọc `is_held` cũ + ghi lại giá trị mới,
-    thuộc chunk C2 - KHÔNG làm ở đây).
+    (E3-4/C1, sửa lại phần "job active" ở nhánh set tại chunk C2 - xem
+    ghi chú "Sửa tại C2" bên dưới) - xem `docs/State_E3-4_v1.md` mục
+    "Quyết định phạm vi" điểm 2-5 cho rationale đầy đủ. Hàm THUẦN -
+    không đụng DB/HTTP, chỉ tính giá trị mới từ input đã có sẵn tại
+    vòng heartbeat đó.
 
     - Nếu `is_held` hiện tại là `False`: set `True` khi và chỉ khi CẢ
       3 điều kiện đều đúng:
@@ -145,16 +152,43 @@ def compute_updated_is_held(
       2. `new_status` thuộc `_HOLD_TRIGGER_STATUSES` (`FINISHED`/
          `ERROR`, điểm 3 - đúng 2 giá trị AC gốc E3-4 nêu, không mở
          rộng thêm).
-      3. Máy đang có job active tại thời điểm đó (điểm 2 - suy ra từ
-         `filename is not None`, KHÔNG dùng bảng `jobs` vì bảng đó
-         luôn rỗng do Epic 4 chưa triển khai).
+      3. Máy đang có job active NGAY TRƯỚC thời điểm chuyển trạng thái
+         đó (điểm 2) - suy ra từ `old_status in
+         moonraker.http_client.ACTIVE_JOB_STATUSES` (PRINTING/PAUSED).
+         **Sửa tại chunk C2** (khác thiết kế ban đầu ở C1, vốn dùng
+         `filename is not None` của CHÍNH `new_status`): phát hiện khi
+         wiring vào driver thật (`app/moonraker/http_client.py::
+         get_status`, đã khoá từ E2-2 - xem "Phụ lục: Checklist kỹ
+         thuật Moonraker" trong `Decisions.md`) rằng `PrinterStatus.
+         filename` CHỈ có giá trị khi `canonical_status` là
+         `PRINTING`/`PAUSED` - tại đúng vòng heartbeat phát hiện
+         `new_status = FINISHED/ERROR`, `filename` LUÔN LÀ `None` (nhánh
+         `if canonical_status in (CANONICAL_PRINTING, CANONICAL_PAUSED)`
+         không khớp) - dùng `filename` của lần gọi đó cho nhánh set sẽ
+         KHÔNG BAO GIỜ set được `is_held` qua driver thật, dù test thuần
+         (truyền `filename` tuỳ ý, không qua driver thật) ở
+         `tests/heartbeat/test_hold.py` (C1) vẫn pass vì không phát hiện
+         ra ràng buộc này. `old_status` (đã có sẵn trong tham số hàm từ
+         C1) phản ánh đúng "máy có đang in tại thời điểm TRƯỚC khi
+         chuyển hẳn sang FINISHED/ERROR" - đúng ngữ nghĩa AC hơn, và
+         khớp đúng mục đích đã ghi sẵn trong docstring của
+         `ACTIVE_JOB_STATUSES` ("Trạng thái coi là 'có job active' cho
+         mục đích D-010/D-011", `http_client.py`, có từ E0-3 - hằng số
+         này TỒN TẠI SẴN nhưng C1 chưa dùng tới). Toàn bộ 9 test đã có ở
+         `test_hold.py` (C1) vẫn pass với thay đổi này (đối chiếu lại,
+         không cần sửa) vì test set `old_status="PRINTING"` cho case
+         "có job active" và `old_status="IDLE"` cho case "không có" -
+         đã tình cờ đúng tinh thần điều kiện mới.
     - Nếu `is_held` hiện tại là `True`: CHỈ tự gỡ về `False` khi phát
       hiện đúng ngoại lệ whitelist DUY NHẤT (điểm 5, nguyên tắc #1
       `CLAUDE.md`): `new_status == _HOLD_AUTO_CLEAR_STATUS` ("PRINTING")
       VÀ `filename is not None` (máy đã hồi phục về đang in với job
-      thật - false alarm do rớt mạng thoáng qua). Mọi trường hợp khác
-      giữ nguyên `True` - endpoint xác nhận vận hành viên (chunk C3,
-      điểm 6) là đường DUY NHẤT khác được phép gỡ `is_held`.
+      thật - false alarm do rớt mạng thoáng qua). Nhánh này KHÔNG đổi
+      ở C2 - `filename` VẪN dùng được ở đây vì `new_status = PRINTING`
+      khớp đúng điều kiện `http_client.py` populate `filename` thật.
+      Mọi trường hợp khác giữ nguyên `True` - endpoint xác nhận vận
+      hành viên (chunk C3, điểm 6) là đường DUY NHẤT khác được phép gỡ
+      `is_held`.
     """
     if is_held:
         auto_recovered = (
@@ -164,7 +198,7 @@ def compute_updated_is_held(
 
     is_real_transition = new_status != old_status
     reached_hold_status = new_status in _HOLD_TRIGGER_STATUSES
-    has_active_job = filename is not None
+    has_active_job = old_status in ACTIVE_JOB_STATUSES
     return is_real_transition and reached_hold_status and has_active_job
 
 def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
@@ -180,11 +214,16 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
 
     - Thành công: cập nhật `status` (canonical, D-013) + reset
       `consecutive_heartbeat_failures = 0` + `next_heartbeat_at = now +
-      DEFAULT_HEARTBEAT_INTERVAL_SECONDS`.
+      DEFAULT_HEARTBEAT_INTERVAL_SECONDS` + tính lại `is_held` (D-010,
+      E3-4/C2) qua `compute_updated_is_held` (dùng `status` cũ đọc được
+      ở đầu vòng này, `canonical_status` mới, `is_held` cũ, và
+      `filename` từ `PrinterStatus`).
     - Thất bại (`MoonrakerClientError`, cùng exception `list_printers`
       đã dùng): `status = OFFLINE` (Quyết định 7) + tăng
       `consecutive_heartbeat_failures` thêm 1 + tính lại
-      `next_heartbeat_at` theo công thức backoff.
+      `next_heartbeat_at` theo công thức backoff; `is_held` GIỮ NGUYÊN
+      (mất kết nối không phải sự kiện FINISHED/ERROR/PRINTING thật -
+      xem `docs/State_E3-4_v1.md` mục "CHUNK KẾ TIẾP CẦN CHẠY").
 
     Không raise cho lỗi kết nối của từng máy riêng lẻ (map sang
     `OFFLINE`, không phải exception) - nhất quán `list_printers`.
@@ -204,6 +243,8 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
             api_key,
             klipper_version,
             consecutive_failures,
+            old_status,
+            is_held,
         ) in due_rows:
             driver = resolve_driver(
                 model=model,
@@ -214,9 +255,11 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
             )
 
             try:
-                canonical_status = driver.get_status().canonical_status
+                printer_status = driver.get_status()
+                canonical_status = printer_status.canonical_status
             except MoonrakerClientError:
 
+                printer_status = None
                 canonical_status = None
 
             if canonical_status is None:
@@ -225,10 +268,18 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
                 interval_seconds = _compute_backoff_interval_seconds(
                     new_consecutive_failures
                 )
+
+                new_is_held = bool(is_held)
             else:
                 new_status = canonical_status
                 new_consecutive_failures = 0
                 interval_seconds = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+                new_is_held = compute_updated_is_held(
+                    old_status=old_status,
+                    new_status=canonical_status,
+                    is_held=bool(is_held),
+                    filename=printer_status.filename,
+                )
 
             (next_heartbeat_at,) = connection.execute(
                 _NEXT_HEARTBEAT_AT_SQL, (interval_seconds,)
@@ -240,6 +291,7 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
                     new_status,
                     new_consecutive_failures,
                     next_heartbeat_at,
+                    int(new_is_held),
                     printer_id,
                 ),
             )

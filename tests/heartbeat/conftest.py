@@ -50,6 +50,15 @@ Fixture MỚI ở chunk này (không có ở `tests/printers/conftest.py`):
   (`status`/`consecutive_heartbeat_failures`/`next_heartbeat_at`) của 1
   `printer_id` từ `heartbeat_db_path`, dùng để assert sau khi gọi
   `run_heartbeat_cycle`.
+
+Cập nhật tại chunk E3-4/C2 (xem `docs/State_E3-4_v1.md` mục "CHUNK KẾ
+TIẾP CẦN CHẠY"): `insert_printer` nhận thêm tham số tuỳ chọn `is_held`
+(mặc định `0`, khớp DEFAULT của cột ở `app/db/schema.py`) - thêm tham
+số có default không phá vỡ lời gọi cũ (E1-4). KHÔNG đổi số cột
+`fetch_printer` trả về (test E1-4 đã khoá dùng unpack đúng 3 giá trị,
+đổi arity sẽ làm vỡ unpack đó) - thêm fixture MỚI riêng
+`fetch_is_held` đọc đúng 1 cột `is_held`, dùng cho các test mới của
+chunk này (`tests/heartbeat/test_service.py`).
 """
 
 from __future__ import annotations
@@ -156,15 +165,20 @@ def heartbeat_db_path(tmp_path) -> str:
 _INSERT_PRINTER_SQL = """
 INSERT INTO printers (
     name, ip, moonraker_port, model, api_key, klipper_version,
-    consecutive_heartbeat_failures, next_heartbeat_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    consecutive_heartbeat_failures, next_heartbeat_at, is_held
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 @pytest.fixture()
 def insert_printer(heartbeat_db_path: str) -> Callable[..., int]:
     """Chèn thẳng 1 dòng `printers` vào `heartbeat_db_path` (KHÔNG qua
     `register_printer` — xem docstring module cho lý do). Trả về
-    `printer_id` vừa tạo."""
+    `printer_id` vừa tạo.
+
+    Tham số `is_held` (mới, E3-4/C2) mặc định `0` — khớp DEFAULT của
+    cột ở `app/db/schema.py`, cho phép dựng kịch bản "máy đã đang bị
+    hold từ trước" (`is_held=1`) cho test ngoại lệ tự gỡ (điểm 5,
+    `docs/State_E3-4_v1.md`)."""
 
     def _insert(
         ip: str,
@@ -176,6 +190,7 @@ def insert_printer(heartbeat_db_path: str) -> Callable[..., int]:
         klipper_version: Optional[str] = None,
         consecutive_heartbeat_failures: int = 0,
         next_heartbeat_at: Optional[str] = None,
+        is_held: int = 0,
     ) -> int:
         connection = sqlite3.connect(heartbeat_db_path)
         try:
@@ -190,6 +205,7 @@ def insert_printer(heartbeat_db_path: str) -> Callable[..., int]:
                     klipper_version,
                     consecutive_heartbeat_failures,
                     next_heartbeat_at,
+                    is_held,
                 ),
             )
             connection.commit()
@@ -216,6 +232,25 @@ def fetch_printer(heartbeat_db_path: str) -> Callable[[int], Tuple]:
         finally:
             connection.close()
         return row
+
+    return _fetch
+
+@pytest.fixture()
+def fetch_is_held(heartbeat_db_path: str) -> Callable[[int], bool]:
+    """Đọc lại cột `is_held` (D-010) của 1 `printer_id` từ
+    `heartbeat_db_path` — fixture MỚI, E3-4/C2 (xem docstring module
+    cho lý do không mở rộng arity của `fetch_printer` đã khoá)."""
+
+    def _fetch(printer_id: int) -> bool:
+        connection = sqlite3.connect(heartbeat_db_path)
+        try:
+            (is_held,) = connection.execute(
+                "SELECT is_held FROM printers WHERE id = ?",
+                (printer_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        return bool(is_held)
 
     return _fetch
 
