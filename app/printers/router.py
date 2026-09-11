@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
     PrinterCreateRequest,
@@ -12,10 +12,15 @@ from app.printers.schemas import (
 )
 from app.printers.service import (
     PrinterAlreadyExistsError,
+    PrinterCommandError,
     PrinterConnectionError,
+    cancel_print,
     delete_printer,
     list_printers,
+    pause_print,
     register_printer,
+    resume_print,
+    start_print,
     update_printer,
 )
 
@@ -65,3 +70,52 @@ def remove_printer(printer_id: int) -> None:
             status_code=409,
             detail="Máy còn dữ liệu jobs/job_history liên quan, không thể xoá.",
         )
+
+@router.post("/printers/{printer_id}/print/start", response_model=PrinterResponse)
+async def start_printer_job(printer_id: int, file: UploadFile = File(...)) -> PrinterResponse:
+    file_content = await file.read()
+    try:
+        result = start_print(printer_id, file.filename, file_content)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/pause", response_model=PrinterResponse)
+def pause_printer_job(printer_id: int) -> PrinterResponse:
+    try:
+        result = pause_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/resume", response_model=PrinterResponse)
+def resume_printer_job(printer_id: int) -> PrinterResponse:
+    try:
+        result = resume_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/cancel", response_model=PrinterResponse)
+def cancel_printer_job(printer_id: int) -> PrinterResponse:
+    try:
+        result = cancel_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
