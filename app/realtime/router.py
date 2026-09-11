@@ -23,26 +23,15 @@ máy in". Khác với trường hợp máy TỒN TẠI nhưng chưa có dữ li�
 realtime (`realtime_connected=False`, Quyết định phạm vi #4,
 `docs/State_E2-2_v2.md`) — trường hợp đó vẫn trả 200 bình thường, không
 phải lỗi.
-
-Chunk E2-3/C3: thêm route thứ 4 `GET /printers/events` (đọc lại log
-cảnh báo, `app/realtime/alerts.py`, C1/C2, Quyết định phạm vi #7,
-`docs/State_E2-3_v4.md`) — KHÔNG sửa 3 route trên. Query param tuỳ
-chọn `printer_id`/`limit`, gọi thẳng `list_printer_events` (đồng bộ,
-không `await` — hàm đó dùng `sqlite3` thô, không phải coroutine, khác
-2 route snapshot ở trên). `printer_id` không khớp máy nào trả danh
-sách RỖNG (200), KHÔNG 404 — khác hẳn route snapshot 1 máy phía trên,
-vì đây là log lịch sử chứ không phải "trạng thái hiện tại của 1 máy cụ
-thể phải tồn tại".
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.realtime.alerts import PrinterEventResponse, list_printer_events
 from app.realtime.schemas import PrinterRealtimeResponse
 from app.realtime.service import (
     get_printer_realtime,
@@ -95,18 +84,3 @@ async def stream_printers_realtime(request: Request) -> StreamingResponse:
         ),
         media_type="text/event-stream",
     )
-
-@router.get("/printers/events", response_model=List[PrinterEventResponse])
-def list_printer_events_endpoint(
-    printer_id: Optional[int] = None, limit: int = 50
-) -> List[PrinterEventResponse]:
-    """Đọc lại log cảnh báo (bảng `events`, `app/realtime/alerts.py`) —
-    lọc theo `printer_id` nếu truyền, sắp mới nhất trước, giới hạn
-    `limit` (chặn trần ở `MAX_LIST_LIMIT=200` bên trong
-    `list_printer_events`, kể cả nếu client truyền giá trị lớn hơn).
-    `printer_id` không khớp máy nào trong bảng `events` trả về danh
-    sách rỗng, KHÔNG phải 404 (Quyết định phạm vi #7, `docs/
-    State_E2-3_v4.md`) — khác 2 route snapshot phía trên. Route sync
-    (khác 3 route trên là `async def`) vì `list_printer_events` dùng
-    `sqlite3` thô đồng bộ, không có `await` nào bên trong."""
-    return list_printer_events(printer_id=printer_id, limit=limit)

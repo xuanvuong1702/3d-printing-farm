@@ -31,14 +31,6 @@ Chunk E2-2/C2: include router thứ 2 (`app/realtime/router.py`, domain
 "giám sát real-time" — 2 endpoint snapshot đọc `app.state.realtime_store`
 đã gán ở trên) — KHÔNG đổi `printers_router`/route `/`/`lifespan` hiện
 có.
-
-Chunk E2-3/C3: mở rộng `lifespan` (KHÔNG đổi phần heartbeat/websocket
-pool/router include đã có ở trên, chỉ thêm) để khởi động/huỷ watcher
-cảnh báo lỗi máy (`app/realtime/alerts.py`, C2, Quyết định phạm vi #9,
-`docs/State_E2-3_v4.md`) — startup: `start_alert_watcher(realtime_store)`
-(tái dùng đúng `realtime_store` đã tạo cho websocket pool ở trên);
-shutdown: `stop_alert_watcher(alert_task)`, huỷ TRƯỚC websocket pool
-(LIFO theo thứ tự khởi động).
 """
 
 from contextlib import asynccontextmanager
@@ -48,7 +40,6 @@ from fastapi import FastAPI
 
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 from app.printers.router import router as printers_router
-from app.realtime.alerts import start_alert_watcher, stop_alert_watcher
 from app.realtime.pool import start_websocket_pool, stop_websocket_pool
 from app.realtime.router import router as realtime_router
 from app.realtime.state import RealtimeStateStore
@@ -59,11 +50,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     realtime_store = RealtimeStateStore()
     app.state.realtime_store = realtime_store
     websocket_pool = start_websocket_pool(realtime_store)
-    alert_task = start_alert_watcher(realtime_store)
     try:
         yield
     finally:
-        await stop_alert_watcher(alert_task)
         await stop_websocket_pool(websocket_pool)
         await stop_heartbeat_scheduler(heartbeat_task)
 
