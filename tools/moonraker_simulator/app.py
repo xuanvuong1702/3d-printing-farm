@@ -133,6 +133,38 @@ TIẾP CẦN CHẠY", "Quyết định phạm vi" #2/#3/#11) — thêm route `PO
 `print_stats_state` (không cần thiết, xem rationale đầy đủ ở state
 file trên) — tái dùng đúng field native `webhooks_state` đã có từ
 E0-5/C1, không thêm field mới vào `SimulatorState`.
+
+Quyết định chunk C2 của E3-3 (`docs/State_E3-3_v3.md` mục "CHUNK KẾ
+TIẾP CẦN CHẠY", `docs/State_E3-3_v2.md` "Quyết định phạm vi" #2/#11) —
+mô phỏng Machine/Power API, khớp
+`http_client.py::set_device_power` (E3-3/C1):
+- Thêm field mới `power_devices: dict[str, str]` vào `SimulatorState`
+  (`state.py`, E3-3/C2) — khác toàn bộ field hiện có (không phải 1 giá
+  trị scalar cố định của 1 máy, mà 1 dict nhiều device có thể có trong
+  cùng 1 máy), có sẵn 1 device mẫu `"printer"` mặc định `"off"`.
+- `POST /machine/device_power/device`: đọc JSON body `{"device",
+  "action"}` (Pydantic model `DevicePowerRequest` — style JSON body
+  đầu tiên trong file này, khác `gcode_script` dùng query string hay
+  `upload_file` dùng multipart form; đây là request khớp đúng shape
+  JSON của Moonraker thật, tận dụng validation tự động của FastAPI/
+  Pydantic thay vì tự đọc `Request` thô). KHÔNG validate `action` phải
+  thuộc `{"on", "off"}` và KHÔNG validate `device` đã tồn tại sẵn
+  trong dict — nếu `device` chưa có, tạo mới luôn (đúng tinh thần
+  "simulator dev/test, không phải Moonraker thật" đã ghi trong state
+  file — validate nghiệp vụ, ví dụ 409 khi máy không hỗ trợ, là trách
+  nhiệm tầng `app/printers/service.py` ở C3, không phải simulator).
+  Trả về `{"<device>": "<trạng_thái_mới>"}` — đúng shape response thật
+  của Machine/Power API (không bọc thêm `"result"` — endpoint này của
+  Moonraker thật không dùng envelope JSON-RPC-style như các endpoint
+  `/printer/...`/`/server/...` khác, xác nhận qua cùng nguồn tài liệu
+  đã ghi ở `http_client.py::set_device_power`).
+- `GET /machine/device_power/device?device=<tên>` (tuỳ chọn theo
+  "Quyết định phạm vi" #2/#11 — thêm vì rẻ và tiện cho việc viết test
+  ở C4 sau này, không bắt buộc dùng): đọc lại trạng thái hiện tại của
+  1 device, trả cùng shape response như route POST ở trên. Nếu
+  `device` chưa từng được set (không có trong dict) → trả `"off"` mặc
+  định (không tạo mới trong dict qua đường đọc, khác đường ghi POST ở
+  trên — đọc không có tác dụng phụ).
 """
 
 from __future__ import annotations
@@ -142,8 +174,18 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 from tools.moonraker_simulator.state import SimulatorState
+
+class DevicePowerRequest(BaseModel):
+    """Body JSON của `POST /machine/device_power/device` (E3-3/C2) — khớp
+    đúng 2 field mà `http_client.py::set_device_power` gửi lên, KHÔNG thêm
+    field nào khác (Moonraker thật còn hỗ trợ các field khác không dùng tới
+    ở phạm vi story này)."""
+
+    device: str
+    action: str
 
 app = FastAPI(title="QIDI Moonraker Simulator")
 
@@ -341,6 +383,31 @@ def emergency_stop() -> dict:
     """
     state.webhooks_state = "shutdown"
     return {"result": "ok"}
+
+@app.post("/machine/device_power/device")
+def set_device_power(body: DevicePowerRequest) -> dict:
+    """POST /machine/device_power/device — khớp
+    `http_client.py::set_device_power` (E3-3/C1).
+
+    Cập nhật `state.power_devices[body.device] = body.action` (tạo mới
+    key nếu `device` chưa từng tồn tại), không validate `action`/`device`
+    (quyết định C2, xem docstring module) — trả về đúng shape response
+    thật `{"<device>": "<trạng_thái_mới>"}`, KHÔNG bọc `"result"`.
+    """
+    state.power_devices[body.device] = body.action
+    return {body.device: state.power_devices[body.device]}
+
+@app.get("/machine/device_power/device")
+def get_device_power(device: str) -> dict:
+    """GET /machine/device_power/device?device=<tên> — tuỳ chọn (quyết định
+    C2, không bắt buộc theo "Quyết định phạm vi" #2/#11), phục vụ test/dev
+    đọc lại trạng thái hiện tại của 1 device.
+
+    Không có tác dụng phụ: nếu `device` chưa từng được set qua route POST ở
+    trên, trả mặc định `"off"` mà KHÔNG tạo key mới trong
+    `state.power_devices` (khác route POST).
+    """
+    return {device: state.power_devices.get(device, "off")}
 
 _WS_BROADCAST_POLL_INTERVAL_SECONDS = 0.05
 
