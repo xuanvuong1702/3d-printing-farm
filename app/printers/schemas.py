@@ -19,6 +19,10 @@ không copy lại ở đây):
 (`app/db/schema.py::CREATE_PRINTERS_SQL`), trừ việc giải mã cột
 `capabilities` (JSON TEXT trong DB) thành `List[str]` cho tiện dùng ở
 tầng client, và `is_held` (INTEGER 0/1 trong DB) thành `bool`.
+`power_device_name` (E3-3/C3) thêm vào đây phản chiếu đúng cột DB mới
+cùng tên (E3-3/C1) — `None` nghĩa là máy CHƯA cấu hình tên device
+Power API (khác hẳn trường hợp máy không có capability `power`, xem
+`capabilities`).
 """
 
 from __future__ import annotations
@@ -51,11 +55,20 @@ class PrinterUpdateRequest(BaseModel):
     "không truyền field" (giữ nguyên) với "truyền `null` tường minh"
     (xoá giá trị hiện có về `NULL` — áp dụng được vì `model`/`api_key`
     đều nullable ở DDL, `app/db/schema.py`).
+
+    `power_device_name` (E3-3/C3, xem `docs/State_E3-3_v2.md` mục
+    "Quyết định phạm vi" điểm 4) — thêm vào đây thay vì route cấu
+    hình riêng, tái dùng đúng cơ chế `model_dump(exclude_unset=True)`
+    ở trên (đã hỗ trợ sẵn, không cần sửa `service.py::update_printer`)
+    để phân biệt "không truyền" (giữ nguyên) với "truyền `null` tường
+    minh" (xoá cấu hình device về `NULL`, quay lại trạng thái "hỗ trợ
+    nhưng chưa cấu hình").
     """
 
     name: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+    power_device_name: Optional[str] = None
 
 class EmergencyStopRequest(BaseModel):
     """Body của `POST /printers/{printer_id}/emergency_stop` (E3-2/C3) —
@@ -80,6 +93,7 @@ class PrinterResponse(BaseModel):
     moonraker_version: Optional[str] = None
     klipper_version: Optional[str] = None
     capabilities: List[str] = Field(default_factory=list)
+    power_device_name: Optional[str] = None
     status: str
     is_held: bool
     created_at: str

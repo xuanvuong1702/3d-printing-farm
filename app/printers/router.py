@@ -36,6 +36,16 @@ namespace `/print/` (khác 4 route trên), body `EmergencyStopRequest`
 tra TRƯỚC khi gọi service); `None`/`PrinterCommandError` map `404`/
 `502` cùng tiền lệ 4 route `/print/`. Xem `docs/State_E3-2_v4.md` mục
 "Quyết định phạm vi" #4-#7 cho rationale đầy đủ.
+
+`POST /printers/{printer_id}/power/{on,off}` (E3-3/C3) — đặt NGOÀI
+namespace `/print/` (cùng tiền lệ `emergency_stop`), KHÔNG có body
+request (khác `emergency_stop`, AC gốc E3-3 không yêu cầu xác nhận
+riêng). `None` → `404`; `PrinterPowerNotSupportedError`/
+`PrinterPowerNotConfiguredError` (máy không hỗ trợ/chưa cấu hình
+`power_device_name`) → `409 Conflict` (2 thông điệp khác nhau, cùng
+mã); `PrinterCommandError` → `502` cùng tiền lệ. Xem
+`docs/State_E3-3_v2.md` mục "Quyết định phạm vi" #6-#9 cho rationale
+đầy đủ.
 """
 
 from __future__ import annotations
@@ -54,11 +64,15 @@ from app.printers.service import (
     PrinterAlreadyExistsError,
     PrinterCommandError,
     PrinterConnectionError,
+    PrinterPowerNotConfiguredError,
+    PrinterPowerNotSupportedError,
     cancel_print,
     delete_printer,
     emergency_stop_printer,
     list_printers,
     pause_print,
+    power_off_printer,
+    power_on_printer,
     register_printer,
     resume_print,
     start_print,
@@ -202,6 +216,41 @@ def emergency_stop_printer_endpoint(
         )
     try:
         result = emergency_stop_printer(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/power/on", response_model=PrinterResponse)
+def power_on_printer_endpoint(printer_id: int) -> PrinterResponse:
+    """Bật nguồn máy in `printer_id` qua Machine/Power API (AC gốc E3-3
+    — "bật/tắt nguồn máy in từ xa nếu có smart plug"). Không có body
+    request (khác `emergency_stop`, xem docstring module)."""
+    try:
+        result = power_on_printer(printer_id)
+    except (PrinterPowerNotSupportedError, PrinterPowerNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/power/off", response_model=PrinterResponse)
+def power_off_printer_endpoint(printer_id: int) -> PrinterResponse:
+    """Tắt nguồn máy in `printer_id` qua Machine/Power API (AC gốc E3-3).
+    Lỗi đọc lại status SAU KHI lệnh tắt nguồn đã thành công (dự kiến
+    mất kết nối vì cắt điện board) KHÔNG bị coi là lỗi — service tự map
+    `OFFLINE`, xem `app/printers/service.py::_run_power_command`."""
+    try:
+        result = power_off_printer(printer_id)
+    except (PrinterPowerNotSupportedError, PrinterPowerNotConfiguredError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result is None:

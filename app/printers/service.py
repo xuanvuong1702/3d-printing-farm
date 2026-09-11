@@ -84,6 +84,27 @@ từ E3-1/C1, gọi `driver.emergency_stop()` thay vì
 `upload_and_print`/`pause_job`/`resume_job`/`cancel_job`. `is_held`
 (D-010) KHÔNG liên quan (E-Stop là hành động operator chủ động xác
 nhận, không phải máy tự chuyển trạng thái ngoài ý muốn).
+
+Luồng `power_on_printer`/`power_off_printer` (E3-3/C3) — xem
+`docs/State_E3-3_v2.md` mục "Quyết định phạm vi" điểm 8/9 cho
+rationale đầy đủ (không lặp lại ở đây): KHÔNG tái dùng thẳng
+`_run_print_command` (khác `emergency_stop_printer`) vì luồng lỗi
+khác hẳn — viết riêng `_run_power_command` dùng chung cho 2 hàm này.
+Thứ tự kiểm tra TRƯỚC khi chạm Moonraker: `printer_id` không tồn tại
+→ trả `None` (router map 404); `capabilities` không chứa `"power"` →
+raise `PrinterPowerNotSupportedError` (router map 409); có capability
+nhưng `power_device_name` là `NULL` → raise
+`PrinterPowerNotConfiguredError` (router map 409, thông điệp khác
+trường hợp trên). Lệnh `driver.set_power(...)` lỗi
+(`MoonrakerClientError`) → raise `PrinterCommandError` (router map
+502, cùng tiền lệ mọi lệnh điều khiển khác). SAU KHI lệnh chính đã
+thành công, đọc lại status khác nhau theo `action`: `"on"` gọi
+`driver.get_status()` bình thường (không bắt riêng exception — chấp
+nhận rủi ro Klippy chưa kịp khởi động, ghi ở "Giới hạn/known issue"
+`Story_E3-3.md`); `"off"` bắt riêng `MoonrakerClientError` từ
+`get_status()` (dự kiến mất kết nối vì đã cắt điện board) và map
+thẳng `canonical_status = "OFFLINE"` — KHÔNG raise lỗi vì bản thân
+lệnh Power API đã thành công.
 """
 
 from __future__ import annotations
@@ -111,7 +132,7 @@ INSERT INTO printers (
 _SELECT_PRINTER_BY_ID_SQL = """
 SELECT id, name, ip, moonraker_port, model, api_key,
        moonraker_version, klipper_version, capabilities,
-       status, is_held, created_at, updated_at
+       power_device_name, status, is_held, created_at, updated_at
 FROM printers WHERE id = ?
 """
 
@@ -136,6 +157,17 @@ class PrinterCommandError(Exception):
     """Lỗi khi gọi lệnh điều khiển job (start/pause/resume/cancel) qua
     driver xuống Moonraker của máy đích — bọc lại `MoonrakerClientError`
     (E3-1/C1, tầng router map sang HTTP 502 Bad Gateway)."""
+
+class PrinterPowerNotSupportedError(Exception):
+    """Máy không có component `power` trong `capabilities` (D-007) —
+    Power API không áp dụng cho máy này (E3-3/C3, tầng router map sang
+    HTTP 409 Conflict)."""
+
+class PrinterPowerNotConfiguredError(Exception):
+    """Máy CÓ capability `power` nhưng `power_device_name` chưa được cấu
+    hình qua `PATCH /printers/{printer_id}` (E3-3/C3, tầng router map
+    sang HTTP 409 Conflict — thông điệp khác
+    `PrinterPowerNotSupportedError`)."""
 
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
@@ -333,6 +365,7 @@ def _resolve_driver_for_row(row: tuple):
         _moonraker_version,
         klipper_version,
         _capabilities_json,
+        _power_device_name,
         _status,
         _is_held,
         _created_at,
@@ -443,6 +476,97 @@ def emergency_stop_printer(
         printer_id, db_path, lambda driver: driver.emergency_stop()
     )
 
+def _run_power_command(
+    printer_id: int, action: str, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Khung dùng chung cho `power_on_printer`/`power_off_printer`
+    (E3-3/C3) — KHÔNG tái dùng `_run_print_command` vì luồng lỗi khác
+    hẳn (xem docstring module, "Quyết định phạm vi" #9 ở
+    `docs/State_E3-3_v2.md`).
+
+    Thứ tự kiểm tra TRƯỚC khi chạm Moonraker: `printer_id` không tồn
+    tại → trả `None` (router map 404); `capabilities` không chứa
+    `"power"` → raise `PrinterPowerNotSupportedError` (409);
+    `power_device_name` là `NULL` → raise
+    `PrinterPowerNotConfiguredError` (409, thông điệp khác trên).
+    `driver.set_power(...)` lỗi → raise `PrinterCommandError` (502).
+
+    SAU KHI lệnh chính đã thành công, đọc lại status khác nhau theo
+    `action`: `"on"` gọi `driver.get_status()` bình thường (không bắt
+    riêng exception); `"off"` bắt riêng `MoonrakerClientError` từ
+    `get_status()` và map thẳng `canonical_status = "OFFLINE"` — KHÔNG
+    raise lỗi vì bản thân lệnh Power API đã thành công.
+    """
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        capabilities_json = row[8]
+        power_device_name = row[9]
+        capabilities: List[str] = json.loads(capabilities_json)
+        if "power" not in capabilities:
+            raise PrinterPowerNotSupportedError(
+                f"Máy id={printer_id} không có capability 'power', không hỗ trợ "
+                "bật/tắt nguồn từ xa."
+            )
+        if power_device_name is None:
+            raise PrinterPowerNotConfiguredError(
+                f"Máy id={printer_id} có capability 'power' nhưng chưa cấu hình "
+                "power_device_name (PATCH /printers/{printer_id})."
+            )
+
+        driver = _resolve_driver_for_row(row)
+        try:
+            driver.set_power(power_device_name, action)
+        except MoonrakerClientError as exc:
+            raise PrinterCommandError(
+                f"Lỗi khi gọi lệnh Power API trên máy id={printer_id}: {exc}"
+            ) from exc
+
+        if action == "off":
+            try:
+                canonical_status = driver.get_status().canonical_status
+            except MoonrakerClientError:
+
+                canonical_status = "OFFLINE"
+        else:
+            canonical_status = driver.get_status().canonical_status
+
+        connection.execute(_UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
+
+def power_on_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Bật nguồn máy in `printer_id` qua Machine/Power API (AC gốc E3-3).
+    Trả `None` nếu không tìm thấy `printer_id`. Raise
+    `PrinterPowerNotSupportedError`/`PrinterPowerNotConfiguredError` nếu
+    máy không hỗ trợ/chưa cấu hình. Raise `PrinterCommandError` nếu
+    Moonraker của máy đích lỗi khi gọi lệnh bật nguồn."""
+    return _run_power_command(printer_id, "on", db_path)
+
+def power_off_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Tắt nguồn máy in `printer_id` qua Machine/Power API (AC gốc E3-3).
+    Trả `None` nếu không tìm thấy `printer_id`. Raise
+    `PrinterPowerNotSupportedError`/`PrinterPowerNotConfiguredError` nếu
+    máy không hỗ trợ/chưa cấu hình. Raise `PrinterCommandError` nếu
+    Moonraker của máy đích lỗi khi gọi lệnh tắt nguồn (KHÔNG raise nếu
+    lỗi chỉ xảy ra ở bước đọc lại status sau đó — map `OFFLINE`, xem
+    `_run_power_command`)."""
+    return _run_power_command(printer_id, "off", db_path)
+
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)
     sang `PrinterResponse` — giải mã `capabilities` (JSON TEXT) thành
@@ -457,6 +581,7 @@ def _row_to_response(row: tuple) -> PrinterResponse:
         moonraker_version,
         klipper_version,
         capabilities_json,
+        power_device_name,
         status,
         is_held,
         created_at,
@@ -472,6 +597,7 @@ def _row_to_response(row: tuple) -> PrinterResponse:
         moonraker_version=moonraker_version,
         klipper_version=klipper_version,
         capabilities=json.loads(capabilities_json),
+        power_device_name=power_device_name,
         status=status,
         is_held=bool(is_held),
         created_at=created_at,
