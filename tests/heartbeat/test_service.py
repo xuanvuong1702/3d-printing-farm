@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import tools.moonraker_simulator.app as simulator_app
 from app.heartbeat.service import (
     DEFAULT_BACKOFF_MULTIPLIER,
     DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
@@ -122,3 +123,119 @@ def test_mixed_online_and_offline_printers_in_one_cycle(
 
 def test_run_heartbeat_cycle_on_empty_table_does_not_raise(heartbeat_db_path):
     run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+_PAST_ISO = "2000-01-01T00:00:00Z"
+
+def test_is_held_set_when_transition_to_finished_with_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "complete"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "FINISHED"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_set_when_transition_to_error_with_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "error"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "ERROR"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_not_set_when_finished_without_prior_active_job(
+    simulator_factory,
+    heartbeat_db_path,
+    insert_printer,
+    fetch_printer,
+    fetch_is_held,
+    set_next_heartbeat_at,
+):
+    handle = simulator_factory(host="127.0.0.1")
+    printer_id = insert_printer(handle.host, handle.port)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "IDLE"
+    assert fetch_is_held(printer_id) is False
+
+    simulator_app.state.print_stats_state = "complete"
+    set_next_heartbeat_at(printer_id, _PAST_ISO)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "FINISHED"
+    assert fetch_is_held(printer_id) is False
+
+def test_is_held_auto_clears_on_recovery_to_printing_with_active_job(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    simulator_app.state.print_stats_filename = "cube.gcode"
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is False
+
+def test_is_held_stays_set_on_recovery_to_printing_without_active_job(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    handle = simulator_factory(host="127.0.0.1")
+    simulator_app.state.print_stats_state = "printing"
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "PRINTING"
+    assert fetch_is_held(printer_id) is True
+
+def test_is_held_unchanged_when_printer_goes_offline(
+    simulator_factory, heartbeat_db_path, insert_printer, fetch_printer, fetch_is_held
+):
+    handle = simulator_factory(host="127.0.0.1")
+    printer_id = insert_printer(handle.host, handle.port, is_held=1)
+    handle.stop()
+
+    run_heartbeat_cycle(db_path=heartbeat_db_path)
+
+    status, _, _ = fetch_printer(printer_id)
+    assert status == "OFFLINE"
+    assert fetch_is_held(printer_id) is True

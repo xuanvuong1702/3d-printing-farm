@@ -5,7 +5,7 @@ import sqlite3
 
 from app.db.migrate import DEFAULT_DB_PATH
 from app.drivers import resolve_driver
-from app.moonraker.http_client import MoonrakerClientError
+from app.moonraker.http_client import ACTIVE_JOB_STATUSES, MoonrakerClientError
 
 DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
@@ -21,7 +21,7 @@ _HOLD_AUTO_CLEAR_STATUS = "PRINTING"
 
 _SELECT_DUE_PRINTERS_SQL = """
 SELECT id, ip, moonraker_port, model, api_key, klipper_version,
-       consecutive_heartbeat_failures
+       consecutive_heartbeat_failures, status, is_held
 FROM printers
 WHERE next_heartbeat_at IS NULL OR next_heartbeat_at <= ?
 """
@@ -31,6 +31,7 @@ UPDATE printers
 SET status = ?,
     consecutive_heartbeat_failures = ?,
     next_heartbeat_at = ?,
+    is_held = ?,
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 """
@@ -62,7 +63,7 @@ def compute_updated_is_held(
 
     is_real_transition = new_status != old_status
     reached_hold_status = new_status in _HOLD_TRIGGER_STATUSES
-    has_active_job = filename is not None
+    has_active_job = old_status in ACTIVE_JOB_STATUSES
     return is_real_transition and reached_hold_status and has_active_job
 
 def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
@@ -81,6 +82,8 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
             api_key,
             klipper_version,
             consecutive_failures,
+            old_status,
+            is_held,
         ) in due_rows:
             driver = resolve_driver(
                 model=model,
@@ -91,9 +94,11 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
             )
 
             try:
-                canonical_status = driver.get_status().canonical_status
+                printer_status = driver.get_status()
+                canonical_status = printer_status.canonical_status
             except MoonrakerClientError:
 
+                printer_status = None
                 canonical_status = None
 
             if canonical_status is None:
@@ -102,10 +107,18 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
                 interval_seconds = _compute_backoff_interval_seconds(
                     new_consecutive_failures
                 )
+
+                new_is_held = bool(is_held)
             else:
                 new_status = canonical_status
                 new_consecutive_failures = 0
                 interval_seconds = DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+                new_is_held = compute_updated_is_held(
+                    old_status=old_status,
+                    new_status=canonical_status,
+                    is_held=bool(is_held),
+                    filename=printer_status.filename,
+                )
 
             (next_heartbeat_at,) = connection.execute(
                 _NEXT_HEARTBEAT_AT_SQL, (interval_seconds,)
@@ -117,6 +130,7 @@ def run_heartbeat_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
                     new_status,
                     new_consecutive_failures,
                     next_heartbeat_at,
+                    int(new_is_held),
                     printer_id,
                 ),
             )

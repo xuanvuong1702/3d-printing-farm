@@ -93,8 +93,8 @@ def heartbeat_db_path(tmp_path) -> str:
 _INSERT_PRINTER_SQL = """
 INSERT INTO printers (
     name, ip, moonraker_port, model, api_key, klipper_version,
-    consecutive_heartbeat_failures, next_heartbeat_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    consecutive_heartbeat_failures, next_heartbeat_at, is_held
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 @pytest.fixture()
@@ -110,6 +110,7 @@ def insert_printer(heartbeat_db_path: str) -> Callable[..., int]:
         klipper_version: Optional[str] = None,
         consecutive_heartbeat_failures: int = 0,
         next_heartbeat_at: Optional[str] = None,
+        is_held: int = 0,
     ) -> int:
         connection = sqlite3.connect(heartbeat_db_path)
         try:
@@ -124,6 +125,7 @@ def insert_printer(heartbeat_db_path: str) -> Callable[..., int]:
                     klipper_version,
                     consecutive_heartbeat_failures,
                     next_heartbeat_at,
+                    is_held,
                 ),
             )
             connection.commit()
@@ -147,6 +149,22 @@ def fetch_printer(heartbeat_db_path: str) -> Callable[[int], Tuple]:
         finally:
             connection.close()
         return row
+
+    return _fetch
+
+@pytest.fixture()
+def fetch_is_held(heartbeat_db_path: str) -> Callable[[int], bool]:
+
+    def _fetch(printer_id: int) -> bool:
+        connection = sqlite3.connect(heartbeat_db_path)
+        try:
+            (is_held,) = connection.execute(
+                "SELECT is_held FROM printers WHERE id = ?",
+                (printer_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        return bool(is_held)
 
     return _fetch
 
