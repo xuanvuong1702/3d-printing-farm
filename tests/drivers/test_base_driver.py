@@ -84,3 +84,36 @@ def test_driver_instance_reusable_across_calls(simulator: int) -> None:
     assert driver.get_status().canonical_status == hc.CANONICAL_PRINTING
     driver.cancel_job()
     assert driver.get_status().canonical_status == hc.CANONICAL_STOPPED
+
+def test_job_queue_status_enqueue_and_start_uploaded_print(
+    simulator: int,
+) -> None:
+    driver = _driver(simulator)
+
+    empty_status = driver.get_job_queue_status()
+    assert empty_status == hc.get_job_queue_status(SIMULATOR_HOST, port=simulator)
+    assert empty_status == {"queued_jobs": [], "queue_state": "ready"}
+
+    driver.upload_file("plate.gcode", b"; fake gcode")
+    enqueue_result = driver.enqueue_job(["plate.gcode"])
+    assert enqueue_result == {
+        "queued_jobs": [{"filename": "plate.gcode"}],
+        "queue_state": "ready",
+    }
+
+    status_after = driver.get_job_queue_status()
+    assert status_after == enqueue_result
+
+    assert driver.get_status().canonical_status == hc.CANONICAL_IDLE
+
+def test_start_uploaded_print(simulator: int) -> None:
+    driver = _driver(simulator)
+    driver.upload_file("cube.gcode", b"; fake gcode")
+
+    result = driver.start_uploaded_print("cube.gcode")
+
+    assert result == "ok"
+    assert isinstance(result, str)
+    status = driver.get_status()
+    assert status.canonical_status == hc.CANONICAL_PRINTING
+    assert status.filename == "cube.gcode"

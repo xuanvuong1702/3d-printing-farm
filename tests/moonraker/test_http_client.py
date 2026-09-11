@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -321,6 +323,80 @@ def test_check_if_printing_false_when_offline():
     )
 
     assert hc.check_if_printing(HOST, port=PORT) is False
+
+@respx.mock
+def test_get_job_queue_status_returns_flat_response_not_wrapped():
+    route = respx.get(f"{BASE_URL}/server/job_queue/status").respond(
+        200,
+        json={
+            "queued_jobs": [{"filename": "a.gcode"}, {"filename": "b.gcode"}],
+            "queue_state": "ready",
+        },
+    )
+
+    result = hc.get_job_queue_status(HOST, port=PORT)
+
+    assert route.called
+
+    assert result == {
+        "queued_jobs": [{"filename": "a.gcode"}, {"filename": "b.gcode"}],
+        "queue_state": "ready",
+    }
+
+@respx.mock
+def test_enqueue_job_sends_filenames_and_reset_as_json_body():
+    route = respx.post(f"{BASE_URL}/server/job_queue/job").respond(
+        200, json={"queued_jobs": [{"filename": "plate.gcode"}], "queue_state": "ready"}
+    )
+
+    result = hc.enqueue_job(HOST, ["plate.gcode"], port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+    body = json.loads(sent_request.content)
+    assert body == {"filenames": ["plate.gcode"], "reset": False}
+    assert result == {
+        "queued_jobs": [{"filename": "plate.gcode"}],
+        "queue_state": "ready",
+    }
+
+@respx.mock
+def test_enqueue_job_passes_reset_true_explicitly():
+    route = respx.post(f"{BASE_URL}/server/job_queue/job").respond(
+        200, json={"queued_jobs": [], "queue_state": "ready"}
+    )
+
+    hc.enqueue_job(HOST, ["a.gcode", "b.gcode"], port=PORT, reset=True)
+
+    sent_request = route.calls.last.request
+    body = json.loads(sent_request.content)
+    assert body == {"filenames": ["a.gcode", "b.gcode"], "reset": True}
+
+@respx.mock
+def test_start_uploaded_print_sends_filename_as_query_param():
+    route = respx.post(f"{BASE_URL}/printer/print/start").respond(
+        200, json="ok"
+    )
+
+    result = hc.start_uploaded_print(HOST, "plate.gcode", port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+    assert sent_request.url.params.get("filename") == "plate.gcode"
+
+    assert sent_request.content == b""
+
+    assert result == "ok"
+    assert isinstance(result, str)
+
+@respx.mock
+def test_start_uploaded_print_raises_on_404_file_not_found():
+    respx.post(f"{BASE_URL}/printer/print/start").respond(
+        404, json={"error": {"message": "File không tồn tại"}}
+    )
+
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.start_uploaded_print(HOST, "khong_ton_tai.gcode", port=PORT)
 
 @respx.mock
 def test_request_sends_api_key_header_when_provided():

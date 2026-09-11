@@ -23,3 +23,6 @@ class SimulatorState:
     uploaded_files: dict[str, int] = field(default_factory=dict)
 
     power_devices: dict[str, str] = field(default_factory=lambda: {"printer": "off"})
+
+    job_queue_state: str = "ready"
+    job_queue: list[str] = field(default_factory=list)

@@ -269,3 +269,44 @@ def check_if_printing(
     status = get_status(host, port=port, api_key=api_key)
     return status.canonical_status in ACTIVE_JOB_STATUSES
 
+def get_job_queue_status(
+    host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
+) -> dict:
+    resp = _request(
+        "GET", host, "/server/job_queue/status", port=port, api_key=api_key
+    )
+    return resp.json()
+
+def enqueue_job(
+    host: str,
+    filenames: list[str],
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+    reset: bool = False,
+) -> dict:
+    resp = _request(
+        "POST",
+        host,
+        "/server/job_queue/job",
+        port=port,
+        api_key=api_key,
+        json={"filenames": filenames, "reset": reset},
+    )
+    return resp.json()
+
+def start_uploaded_print(
+    host: str,
+    filename: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> str:
+    resp = _request(
+        "POST",
+        host,
+        "/printer/print/start",
+        port=port,
+        api_key=api_key,
+        params={"filename": filename},
+    )
+    return resp.json()
+

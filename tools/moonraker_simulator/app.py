@@ -23,6 +23,11 @@ class DevicePowerRequest(BaseModel):
     device: str
     action: str
 
+class EnqueueJobRequest(BaseModel):
+
+    filenames: list[str]
+    reset: bool = False
+
 app = FastAPI(title="QIDI Moonraker Simulator")
 
 state = SimulatorState()
@@ -131,6 +136,35 @@ def get_file_metadata(filename: str) -> dict:
         "estimated_time": round(size * _SIMULATED_SECONDS_PER_BYTE, 1),
         "filename": filename,
     }
+
+def _job_queue_status_payload() -> dict:
+    return {
+        "queued_jobs": [{"filename": f} for f in state.job_queue],
+        "queue_state": state.job_queue_state,
+    }
+
+@app.get("/server/job_queue/status")
+def get_job_queue_status() -> dict:
+    return _job_queue_status_payload()
+
+@app.post("/server/job_queue/job")
+def enqueue_job(body: EnqueueJobRequest) -> dict:
+    if body.reset:
+        state.job_queue = []
+    state.job_queue.extend(body.filenames)
+    return _job_queue_status_payload()
+
+@app.post("/printer/print/start")
+def start_uploaded_print(filename: str) -> str:
+    if filename not in state.uploaded_files:
+        raise HTTPException(
+            status_code=404, detail=f"File không tồn tại: {filename}"
+        )
+    state.print_stats_state = "printing"
+    state.print_stats_filename = filename
+    state.print_stats_print_duration = 0.0
+    state.virtual_sdcard_progress = 0.0
+    return "ok"
 
 @app.post("/printer/gcode/script")
 def gcode_script(script: str = "") -> dict:

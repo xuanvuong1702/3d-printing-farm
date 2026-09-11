@@ -71,6 +71,18 @@ class PrinterDriver(ABC):
     def get_file_metadata(self, filename: str) -> dict:
         pass
 
+    @abstractmethod
+    def get_job_queue_status(self) -> dict:
+        pass
+
+    @abstractmethod
+    def enqueue_job(self, filenames: list[str], reset: bool = False) -> dict:
+        pass
+
+    @abstractmethod
+    def start_uploaded_print(self, filename: str) -> str:
+        pass
+
 class BaseKlipperDriver(PrinterDriver):
 
     def get_server_info(self) -> dict:
@@ -131,5 +143,24 @@ class BaseKlipperDriver(PrinterDriver):
 
     def get_file_metadata(self, filename: str) -> dict:
         return http_client.get_file_metadata(
+            self.host, filename, port=self.port, api_key=self.api_key
+        )
+
+    def get_job_queue_status(self) -> dict:
+        return http_client.get_job_queue_status(
+            self.host, port=self.port, api_key=self.api_key
+        )
+
+    def enqueue_job(self, filenames: list[str], reset: bool = False) -> dict:
+        return http_client.enqueue_job(
+            self.host,
+            filenames,
+            port=self.port,
+            api_key=self.api_key,
+            reset=reset,
+        )
+
+    def start_uploaded_print(self, filename: str) -> str:
+        return http_client.start_uploaded_print(
             self.host, filename, port=self.port, api_key=self.api_key
         )

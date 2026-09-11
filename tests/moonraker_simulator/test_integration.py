@@ -166,6 +166,59 @@ def test_upload_and_print_also_populates_metadata(simulator: int) -> None:
     metadata = hc.get_file_metadata(HOST, "cube.gcode", port=simulator)
     assert metadata["size"] == len(content)
 
+def test_job_queue_status_empty_by_default(simulator: int) -> None:
+    status = hc.get_job_queue_status(HOST, port=simulator)
+    assert status == {"queued_jobs": [], "queue_state": "ready"}
+
+def test_enqueue_job_adds_filename_to_queue(simulator: int) -> None:
+    hc.upload_file(HOST, "plate.gcode", b"; fake gcode", port=simulator)
+
+    result = hc.enqueue_job(HOST, ["plate.gcode"], port=simulator)
+
+    assert result == {
+        "queued_jobs": [{"filename": "plate.gcode"}],
+        "queue_state": "ready",
+    }
+
+    status = hc.get_job_queue_status(HOST, port=simulator)
+    assert status == result
+
+def test_enqueue_job_appends_across_multiple_calls(simulator: int) -> None:
+    hc.enqueue_job(HOST, ["a.gcode"], port=simulator)
+    hc.enqueue_job(HOST, ["b.gcode"], port=simulator)
+
+    status = hc.get_job_queue_status(HOST, port=simulator)
+    assert status["queued_jobs"] == [
+        {"filename": "a.gcode"},
+        {"filename": "b.gcode"},
+    ]
+
+def test_enqueue_job_reset_clears_existing_queue(simulator: int) -> None:
+    hc.enqueue_job(HOST, ["a.gcode"], port=simulator)
+
+    hc.enqueue_job(HOST, ["b.gcode"], port=simulator, reset=True)
+
+    status = hc.get_job_queue_status(HOST, port=simulator)
+    assert status["queued_jobs"] == [{"filename": "b.gcode"}]
+
+def test_start_uploaded_print_begins_printing_existing_file(
+    simulator: int,
+) -> None:
+    hc.upload_file(HOST, "plate.gcode", b"; fake gcode", port=simulator)
+
+    result = hc.start_uploaded_print(HOST, "plate.gcode", port=simulator)
+
+    assert result == "ok"
+    status = hc.get_status(HOST, port=simulator)
+    assert status.canonical_status == hc.CANONICAL_PRINTING
+    assert status.filename == "plate.gcode"
+
+def test_start_uploaded_print_unknown_filename_raises_client_error(
+    simulator: int,
+) -> None:
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.start_uploaded_print(HOST, "chua_tung_upload.gcode", port=simulator)
+
 def test_simulator_state_is_reset_between_tests(simulator: int) -> None:
     status = hc.get_status(HOST, port=simulator)
     assert status.canonical_status == hc.CANONICAL_IDLE
