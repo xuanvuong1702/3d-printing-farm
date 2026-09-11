@@ -45,6 +45,22 @@ Quy ước code (CLAUDE.md, điền lần đầu ở E0-4/C1):
 - mọi cột canonical status có `CHECK` tường minh tại DDL, không chỉ
   validate ở tầng ứng dụng.
 
+Phạm vi E3-3/C1 (chunk này): thêm cột `power_device_name` vào
+`CREATE_PRINTERS_SQL` (xem `docs/State_E3-3_v2.md` mục "Quyết định
+phạm vi" điểm 3 - không phải `D-00X` mới, là thiết kế schema cục bộ
+của story E3-3):
+- `power_device_name`: tên device Machine/Power API (Moonraker) gắn
+  với máy in này (ví dụ tên `[power <device_name>]` cấu hình trong
+  `moonraker.conf` của máy đó) - dùng khi gọi
+  `app/moonraker/http_client.py::set_device_power`. `TEXT`, nullable,
+  KHÔNG có `CHECK` (không phải enum/canonical status). `NULL` nghĩa là
+  "máy có thể có capability `power` (cột `capabilities`) nhưng CHƯA
+  được cấu hình tên device qua `PATCH /printers/{id}`" - khác hẳn máy
+  hoàn toàn không có capability `power`. Cấu hình qua
+  `PrinterUpdateRequest` mở rộng (E1-3 đã có cơ chế
+  `model_dump(exclude_unset=True)`), không phải capability detection
+  tự động (khác `moonraker_version`/`klipper_version`/`capabilities`).
+
 Ghi chú riêng cho chunk C3 (xem `Story_E0-4.md` mục "Quyết định MỚI phát
 sinh..." cho lý do đầy đủ - đều là thiết kế schema cụ thể, không phải
 `D-00X` mới):
@@ -74,6 +90,7 @@ CREATE TABLE IF NOT EXISTS printers (
     moonraker_version TEXT,
     klipper_version TEXT,
     capabilities TEXT NOT NULL DEFAULT '{}',
+    power_device_name TEXT,
     status TEXT NOT NULL DEFAULT 'UNKNOWN'
         CHECK (status IN (
             'IDLE', 'PRINTING', 'PAUSED', 'FINISHED',

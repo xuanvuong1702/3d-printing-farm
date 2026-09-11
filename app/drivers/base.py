@@ -31,11 +31,13 @@ không copy lại ở đây):
   trách nhiệm của tầng service (story sau) khi gọi qua driver.
 
 Tập phương thức của interface bám sát đúng 9 hàm module-level hiện có
-trong `http_client.py` (không thêm phương thức nào ngoài nhu cầu thật
-đã có bằng chứng — AC gốc E0-6 không yêu cầu tính năng nào khác):
+trong `http_client.py` ở E0-6 (không thêm phương thức nào ngoài nhu cầu
+thật đã có bằng chứng — AC gốc E0-6 không yêu cầu tính năng nào khác):
 `get_server_info`, `get_printer_info`, `get_status`, `gcode_script`,
 `upload_and_print`, `cancel_job`, `pause_job`, `resume_job`,
-`check_if_printing`.
+`check_if_printing`. Bổ sung `emergency_stop` (E3-2) và `set_power`
+(E3-3) ở các story sau, cùng nguyên tắc "chỉ thêm khi có bằng chứng nhu
+cầu thật từ AC".
 """
 
 from __future__ import annotations
@@ -110,6 +112,17 @@ class PrinterDriver(ABC):
     def emergency_stop(self) -> dict:
         """Dừng khẩn cấp (E-Stop) - đưa Klippy vào trạng thái 'shutdown' (E3-2)."""
 
+    @abstractmethod
+    def set_power(self, device_name: str, action: str) -> dict:
+        """Bật/tắt 1 smart plug/device qua Machine/Power API (E3-3).
+
+        `device_name` truyền vào MỖI LẦN GỌI (khác `host`/`port`/
+        `api_key` cố định ở constructor) - đây là dữ liệu cấu hình theo
+        từng máy (cột `printers.power_device_name`, đọc ở tầng service),
+        không phải thuộc tính cố định của kết nối Moonraker. `action`
+        thuộc `{"on", "off"}` (xem `docs/State_E3-3_v2.md` mục "Quyết
+        định phạm vi" điểm 2 - không dùng `"toggle"`)."""
+
 class BaseKlipperDriver(PrinterDriver):
     """
     Driver mặc định theo chuẩn Moonraker/Klipper (D-012 mục 1) — luôn
@@ -169,4 +182,9 @@ class BaseKlipperDriver(PrinterDriver):
     def emergency_stop(self) -> dict:
         return http_client.emergency_stop(
             self.host, port=self.port, api_key=self.api_key
+        )
+
+    def set_power(self, device_name: str, action: str) -> dict:
+        return http_client.set_device_power(
+            self.host, device_name, action, port=self.port, api_key=self.api_key
         )

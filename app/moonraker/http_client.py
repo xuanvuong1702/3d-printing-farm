@@ -18,6 +18,10 @@ file đang in, chạy gcode tuỳ ý (`gcode_script`), upload G-code + in ngay,
 cancel/pause/resume job, checkIfPrinting. KHÔNG bao gồm: kênh WebSocket
 (D-002 phần 2 / Q-001 - đã chốt dùng `moonraker-api`, nhưng việc tích hợp
 thư viện đó thuộc phạm vi story khác, vd. E2-1).
+
+Phạm vi E3-2/C1: `emergency_stop`. Phạm vi E3-3/C1 (chunk này):
+`set_device_power` - bật/tắt smart plug/device qua Machine/Power API
+(xem docstring hàm đó).
 """
 
 from __future__ import annotations
@@ -299,6 +303,45 @@ def emergency_stop(
     """
     resp = _request(
         "POST", host, "/printer/emergency_stop", port=port, api_key=api_key
+    )
+    return resp.json()
+
+def set_device_power(
+    host: str,
+    device: str,
+    action: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    """
+    POST /machine/device_power/device - bật/tắt 1 smart plug/device cấu
+    hình sẵn trong `moonraker.conf` của máy đích (Machine/Power API, E3-3).
+
+    Xác nhận nguồn (chunk E3-3/C1, KHÔNG nằm trong "Phụ lục: Checklist kỹ
+    thuật Moonraker" tham chiếu từ print-farm-manager - dự án đó không có
+    tính năng quản lý nguồn điện qua smart plug): tài liệu Moonraker
+    chính thức (moonraker.readthedocs.io/en/latest/external_api/devices/,
+    mục "Power Endpoints" / "Set Device State") - JSON body bắt buộc gồm
+    đúng 2 field `device` (tên device đã cấu hình trong
+    `[power <device_name>]`) và `action`. Chỉ dùng `action` thuộc
+    `{"on", "off"}` ở phạm vi story này (Moonraker còn hỗ trợ `"toggle"`,
+    KHÔNG dùng - AC gốc E3-3 yêu cầu bật/tắt tường minh, không phải đảo
+    trạng thái). Endpoint chỉ tồn tại khi máy đích có ít nhất 1 section
+    `[power <tên>]` cấu hình trong `moonraker.conf` (khác các endpoint
+    `/printer/...` - luôn có sẵn mặc định).
+
+    Trả về JSON dạng `{"<device>": "on"|"off"}` (trạng thái device SAU
+    lệnh) - không tự diễn giải/map sang canonical status ở đây (D-013);
+    việc đọc lại `printers.status` sau lệnh Power API là trách nhiệm của
+    tầng service (`driver.get_status()`, gọi riêng), không phải hàm này.
+    """
+    resp = _request(
+        "POST",
+        host,
+        "/machine/device_power/device",
+        port=port,
+        api_key=api_key,
+        json={"device": device, "action": action},
     )
     return resp.json()
 
