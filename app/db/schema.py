@@ -75,6 +75,22 @@ sinh..." cho lý do đầy đủ - đều là thiết kế schema cụ thể, kh
   loại event (khác `status`, đã có D-013).
 - `users.password_hash`: lưu hash, không lưu plaintext; thuật toán hash
   cụ thể chưa chốt (để E7-2 quyết định).
+
+Phạm vi E4-1/C2 (chunk này): thêm 2 cột mới vào `CREATE_JOBS_SQL` (xem
+`docs/State_E4-1_v3.md` mục "Quyết định phạm vi" điểm 5 - không phải
+`D-00X` mới, là thiết kế schema cục bộ của story E4-1). Sửa trực tiếp
+hằng số SQL hiện có - KHÔNG cần `ALTER TABLE`/migration versioning vì
+service chưa deploy, chưa có dữ liệu thật (đúng quy ước CLAUDE.md mục
+"Migration"):
+- `file_size_bytes`: kích thước file G-code đã upload (bytes), lấy từ
+  field `size` của response `GET /server/files/metadata` (Moonraker).
+  `INTEGER`, nullable - `NULL` trước khi upload xong (lúc job còn
+  `status='uploading'`), điền giá trị thật ngay khi chuyển sang
+  `status='queued'`.
+- `estimated_print_seconds`: thời gian in ước tính (giây), lấy từ field
+  `estimated_time` của cùng response (làm tròn sang `int` ở tầng service
+  vì cột là `INTEGER`, Moonraker có thể trả số thực). `INTEGER`,
+  nullable, cùng lý do/thời điểm điền như `file_size_bytes`.
 """
 
 from __future__ import annotations
@@ -118,6 +134,8 @@ CREATE TABLE IF NOT EXISTS jobs (
             'finished', 'failed', 'cancelled'
         )),
     priority INTEGER NOT NULL DEFAULT 0,
+    file_size_bytes INTEGER,
+    estimated_print_seconds INTEGER,
     created_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL

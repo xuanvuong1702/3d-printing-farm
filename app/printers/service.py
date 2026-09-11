@@ -116,6 +116,28 @@ luôn ghi đè `status`), trả `PrinterResponse` mới nhất. Đây là route
 DUY NHẤT (ngoài ngoại lệ tự gỡ hold ở `run_heartbeat_cycle` khi hồi
 phục `PRINTING` có job thật, `app/heartbeat/service.py`) được phép
 gỡ `is_held` (nguyên tắc #1 `CLAUDE.md`, D-010).
+
+Luồng `upload_file_to_printer` (E4-1/C2) — xem `docs/State_E4-1_v3.md`
+mục "CHUNK KẾ TIẾP CẦN CHẠY" (chunk C2) cho rationale đầy đủ (không lặp
+lại ở đây): (1) validate phần mở rộng `.gcode` (case-insensitive)
+TRƯỚC khi chạm DB/Moonraker — sai định dạng raise
+`UnsupportedFileTypeError` (router C3 map 415); (2) SELECT máy theo
+`printer_id` (tái dùng `_SELECT_PRINTER_BY_ID_SQL`), `None` nếu không
+tồn tại (cùng pattern các hàm service khác, router C3 map 404); (3)
+`INSERT INTO jobs` với `status = 'uploading'` (giá trị canonical đã có
+sẵn từ D-013/E0-4, không bịa mới); (4) gọi `driver.upload_file(...)`
+rồi `driver.get_file_metadata(...)` qua `PrinterDriver` (D-006 AC 1,
+KHÔNG gọi thẳng `http_client`); (5) thành công → `UPDATE jobs SET
+status = 'queued'` + 2 cột metadata mới (`app/db/schema.py`, E4-1/C2);
+(6) `MoonrakerClientError` ở bước (4) → `UPDATE jobs SET status =
+'failed'` rồi raise `PrinterCommandError` (tái dùng đúng exception đã
+có ở `_run_print_command`/`_run_power_command` — cùng pattern
+E3-1/E3-2/E3-3, router C3 map 502, KHÔNG nuốt lỗi gốc). `is_held`
+(D-010) không liên quan (điểm 8 "Quyết định phạm vi") — không dùng
+`_run_print_command`/`_run_power_command` chung được vì luồng ghi
+`jobs` (INSERT rồi UPDATE) khác hẳn luồng ghi `printers.status` của các
+hàm điều khiển job; vẫn tái dùng `_resolve_driver_for_row` cho phần
+dựng driver (không viết lại cơ chế `resolve_driver`, D-012).
 """
 
 from __future__ import annotations
@@ -184,6 +206,12 @@ class PrinterNotHeldError(Exception):
     """Máy hiện KHÔNG đang ở trạng thái `is_held = 1` — không có gì để
     vận hành viên xác nhận (E3-4/C3, D-010 điểm 6, tầng router map sang
     HTTP 409 Conflict)."""
+
+class UnsupportedFileTypeError(Exception):
+    """File upload không phải G-code (`.gcode`, case-insensitive) — từ
+    chối TRƯỚC khi chạm DB/Moonraker (E4-1/C2, AC gốc E4-1 "từ chối
+    file không phải G-code", tầng router map sang HTTP 415 Unsupported
+    Media Type)."""
 
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
@@ -588,6 +616,132 @@ UPDATE printers
 SET is_held = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 """
+
+_GCODE_EXTENSION = ".gcode"
+
+_INSERT_JOB_UPLOADING_SQL = """
+INSERT INTO jobs (printer_id, filename, status) VALUES (?, ?, 'uploading')
+"""
+
+_SELECT_JOB_BY_ID_SQL = """
+SELECT id, printer_id, filename, status, priority, file_size_bytes,
+       estimated_print_seconds, created_at, updated_at
+FROM jobs WHERE id = ?
+"""
+
+_UPDATE_JOB_QUEUED_SQL = """
+UPDATE jobs
+SET status = 'queued', file_size_bytes = ?, estimated_print_seconds = ?,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+_UPDATE_JOB_FAILED_SQL = """
+UPDATE jobs
+SET status = 'failed', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+def upload_file_to_printer(
+    printer_id: int,
+    filename: str,
+    file_content: bytes,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[dict]:
+    """Upload file G-code (đã cắt lớp sẵn) lên máy `printer_id`, KHÔNG in
+    ngay (E4-1/C2, AC gốc E4-1). Tạo 1 bản ghi `jobs` cho lần upload này
+    (xem docstring module này, mục "Luồng `upload_file_to_printer`" cho
+    rationale đầy đủ).
+
+    Raise `UnsupportedFileTypeError` NGAY nếu `filename` không kết thúc
+    bằng `.gcode` (case-insensitive) — validate trước khi chạm
+    DB/Moonraker, không tốn 1 request upload thật nếu sai định dạng
+    (router C3 map 415).
+
+    Trả `None` nếu không tìm thấy `printer_id` (router C3 map 404) —
+    cùng pattern mọi hàm service khác, không tạo bản ghi `jobs` nào
+    trong trường hợp này.
+
+    Raise `PrinterCommandError` nếu Moonraker của máy đích lỗi khi gọi
+    `upload_file`/`get_file_metadata` (bản ghi `jobs` vừa tạo được
+    UPDATE sang `status = 'failed'` trước khi raise — giữ lại làm log
+    lỗi, không xoá, router C3 map 502).
+
+    Trả `dict` (tên field khớp cột `jobs` — đủ dùng cho schema response
+    `JobResponse` sẽ tạo ở C3, chưa cần định nghĩa schema đó ở chunk
+    này) của bản ghi `jobs` sau khi cập nhật `status = 'queued'` +
+    metadata (`file_size_bytes`/`estimated_print_seconds`)."""
+    if not filename.lower().endswith(_GCODE_EXTENSION):
+        raise UnsupportedFileTypeError(
+            f"File {filename!r} không phải G-code (.gcode) - từ chối upload."
+        )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        driver = _resolve_driver_for_row(row)
+
+        cursor = connection.execute(_INSERT_JOB_UPLOADING_SQL, (printer_id, filename))
+        connection.commit()
+        job_id = cursor.lastrowid
+
+        try:
+            driver.upload_file(filename, file_content)
+            metadata = driver.get_file_metadata(filename)
+        except MoonrakerClientError as exc:
+            connection.execute(_UPDATE_JOB_FAILED_SQL, (job_id,))
+            connection.commit()
+            raise PrinterCommandError(
+                f"Lỗi khi upload file lên máy id={printer_id}: {exc}"
+            ) from exc
+
+        file_size_bytes = metadata.get("size")
+        estimated_time = metadata.get("estimated_time")
+        estimated_print_seconds = (
+            int(estimated_time) if estimated_time is not None else None
+        )
+
+        connection.execute(
+            _UPDATE_JOB_QUEUED_SQL,
+            (file_size_bytes, estimated_print_seconds, job_id),
+        )
+        connection.commit()
+        job_row = connection.execute(_SELECT_JOB_BY_ID_SQL, (job_id,)).fetchone()
+    finally:
+        connection.close()
+
+    return _job_row_to_dict(job_row)
+
+def _job_row_to_dict(row: tuple) -> dict:
+    """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_JOB_BY_ID_SQL`)
+    sang `dict` — đủ dùng làm nền cho schema response `JobResponse`
+    (C3), chưa cần tạo schema đó ở chunk này (E4-1/C2)."""
+    (
+        id_,
+        printer_id,
+        filename,
+        status,
+        priority,
+        file_size_bytes,
+        estimated_print_seconds,
+        created_at,
+        updated_at,
+    ) = row
+    return {
+        "id": id_,
+        "printer_id": printer_id,
+        "filename": filename,
+        "status": status,
+        "priority": priority,
+        "file_size_bytes": file_size_bytes,
+        "estimated_print_seconds": estimated_print_seconds,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
 
 def confirm_printer(
     printer_id: int, db_path: str = DEFAULT_DB_PATH
