@@ -55,6 +55,10 @@ class PrinterDriver(ABC):
     def check_if_printing(self) -> bool:
         pass
 
+    @abstractmethod
+    def emergency_stop(self) -> dict:
+        pass
+
 class BaseKlipperDriver(PrinterDriver):
 
     def get_server_info(self) -> dict:
@@ -95,5 +99,10 @@ class BaseKlipperDriver(PrinterDriver):
 
     def check_if_printing(self) -> bool:
         return http_client.check_if_printing(
+            self.host, port=self.port, api_key=self.api_key
+        )
+
+    def emergency_stop(self) -> dict:
+        return http_client.emergency_stop(
             self.host, port=self.port, api_key=self.api_key
         )

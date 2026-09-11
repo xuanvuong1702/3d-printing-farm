@@ -201,6 +201,14 @@ def resume_job(
     resp = _request("POST", host, "/printer/print/resume", port=port, api_key=api_key)
     return resp.json()
 
+def emergency_stop(
+    host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
+) -> dict:
+    resp = _request(
+        "POST", host, "/printer/emergency_stop", port=port, api_key=api_key
+    )
+    return resp.json()
+
 def check_if_printing(
     host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
 ) -> bool:
