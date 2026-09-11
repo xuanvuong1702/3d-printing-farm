@@ -29,6 +29,13 @@ hành, không phải lỗi validate lúc đăng ký). Xem
 đầy đủ (không lặp lại ở đây): "start" chỉ hỗ trợ upload file mới +
 in ngay (multipart, field `file`), KHÔNG hỗ trợ start file đã có sẵn
 trên máy qua tên file (thuộc phạm vi E4-1).
+
+`POST /printers/{printer_id}/emergency_stop` (E3-2/C3) — đặt NGOÀI
+namespace `/print/` (khác 4 route trên), body `EmergencyStopRequest`
+(`confirm: bool = False`). `confirm` không phải `true` → `422` (kiểm
+tra TRƯỚC khi gọi service); `None`/`PrinterCommandError` map `404`/
+`502` cùng tiền lệ 4 route `/print/`. Xem `docs/State_E3-2_v4.md` mục
+"Quyết định phạm vi" #4-#7 cho rationale đầy đủ.
 """
 
 from __future__ import annotations
@@ -38,6 +45,7 @@ from typing import List
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
+    EmergencyStopRequest,
     PrinterCreateRequest,
     PrinterResponse,
     PrinterUpdateRequest,
@@ -48,6 +56,7 @@ from app.printers.service import (
     PrinterConnectionError,
     cancel_print,
     delete_printer,
+    emergency_stop_printer,
     list_printers,
     pause_print,
     register_printer,
@@ -161,6 +170,38 @@ def cancel_printer_job(printer_id: int) -> PrinterResponse:
     "cancel")."""
     try:
         result = cancel_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post(
+    "/printers/{printer_id}/emergency_stop", response_model=PrinterResponse
+)
+def emergency_stop_printer_endpoint(
+    printer_id: int, request: EmergencyStopRequest
+) -> PrinterResponse:
+    """Gửi lệnh Emergency Stop (E-Stop) tới máy `printer_id` (AC gốc
+    E3-2 — "Nút E-Stop riêng biệt, có xác nhận trước khi gửi"). Đặt
+    NGOÀI namespace `/print/` (khác 4 route trên) vì đây là lệnh an
+    toàn tác động lên toàn máy, không phải thao tác trên "job đang
+    chạy" (xem `docs/State_E3-2_v4.md` mục "Quyết định phạm vi" #4).
+
+    `confirm` không phải `true` → `422` (kiểm tra TRƯỚC khi gọi
+    service, không chạm DB/Moonraker nếu chưa xác nhận — fail-safe,
+    "Quyết định phạm vi" #5). `PrinterCommandError` → `502` (cùng tiền
+    lệ 4 route `/print/`); kết quả `None` → `404` (cùng tiền lệ
+    PATCH/DELETE E1-3)."""
+    if not request.confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="Cần xác nhận (confirm=true) trước khi gửi lệnh Emergency Stop.",
+        )
+    try:
+        result = emergency_stop_printer(printer_id)
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result is None:

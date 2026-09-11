@@ -12,6 +12,9 @@ không copy lại ở đây):
   request — chỉ xuất hiện ở `PrinterResponse`, không có trong
   `PrinterCreateRequest`.
 
+`EmergencyStopRequest` (E3-2/C3) — xem docstring class bên dưới, đúng
+1 field `confirm: bool = False` (fail-safe).
+
 `PrinterResponse` phản chiếu đúng các cột của bảng `printers`
 (`app/db/schema.py::CREATE_PRINTERS_SQL`), trừ việc giải mã cột
 `capabilities` (JSON TEXT trong DB) thành `List[str]` cho tiện dùng ở
@@ -53,6 +56,17 @@ class PrinterUpdateRequest(BaseModel):
     name: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
+
+class EmergencyStopRequest(BaseModel):
+    """Body của `POST /printers/{printer_id}/emergency_stop` (E3-2/C3) —
+    đúng 1 field `confirm`, mặc định `False` (fail-safe). Route chỉ
+    thực thi lệnh khi `confirm=true`; thiếu field hoặc `confirm=false`
+    → `422 Unprocessable Entity` (xem `docs/State_E3-2_v4.md` mục
+    "Quyết định phạm vi" #5). Đáp ứng phần "có xác nhận trước khi gửi"
+    của AC gốc E3-2 ở tầng API — UI xác nhận thật (dialog) thuộc phạm
+    vi Frontend Dashboard (Epic 9, ngoài phạm vi service backend)."""
+
+    confirm: bool = False
 
 class PrinterResponse(BaseModel):
     """Phản chiếu 1 dòng của bảng `printers` sau khi đăng ký thành công."""

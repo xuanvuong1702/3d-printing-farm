@@ -76,6 +76,14 @@ raise `PrinterCommandError` (tầng router map sang HTTP 502). Thành
 công → đọc lại `driver.get_status().canonical_status`, UPDATE
 `printers.status`, SELECT lại, trả `_row_to_response(row)` — tái dùng
 đúng pattern write-through đã có ở `list_printers`.
+
+Luồng `emergency_stop_printer` (E3-2/C3) — xem `docs/State_E3-2_v4.md`
+mục "Quyết định phạm vi" cho rationale đầy đủ (không lặp lại ở đây):
+tái dùng nguyên `_run_print_command`/`_resolve_driver_for_row` đã có
+từ E3-1/C1, gọi `driver.emergency_stop()` thay vì
+`upload_and_print`/`pause_job`/`resume_job`/`cancel_job`. `is_held`
+(D-010) KHÔNG liên quan (E-Stop là hành động operator chủ động xác
+nhận, không phải máy tự chuyển trạng thái ngoài ý muốn).
 """
 
 from __future__ import annotations
@@ -412,6 +420,28 @@ def cancel_print(
     `None` nếu không tìm thấy `printer_id`. Raise `PrinterCommandError`
     nếu Moonraker của máy đích lỗi/mất kết nối khi gọi lệnh."""
     return _run_print_command(printer_id, db_path, lambda driver: driver.cancel_job())
+
+def emergency_stop_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """Gửi lệnh Emergency Stop (E-Stop) tới máy `printer_id` (E3-2/C3,
+    AC gốc E3-2). Tái dùng đúng khung `_run_print_command` đã có từ
+    E3-1/C1 (không viết lại) — SELECT máy theo `printer_id` (trả `None`
+    nếu không tìm thấy, router map 404), dựng driver, gọi
+    `driver.emergency_stop()` — bắt `MoonrakerClientError` raise
+    `PrinterCommandError` (router map 502) — rồi đọc lại status (dự
+    kiến `OFFLINE`, D-013, vì lệnh đưa Klippy vào trạng thái
+    "shutdown"), UPDATE DB, trả `PrinterResponse`.
+
+    `is_held` (D-010) KHÔNG liên quan tới hàm này — xem
+    `docs/State_E3-2_v4.md` mục "Quyết định phạm vi" #8: E-Stop là
+    hành động operator chủ động xác nhận, không cần cơ chế `is_held`
+    để "nhắc xác nhận lại". Hàm này không đọc/ghi cột `is_held` ngoài
+    việc SELECT chung (`_SELECT_PRINTER_BY_ID_SQL`) và map response
+    (`_row_to_response`), giống 4 hàm điều khiển job ở trên."""
+    return _run_print_command(
+        printer_id, db_path, lambda driver: driver.emergency_stop()
+    )
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)
