@@ -14,6 +14,9 @@ from app.printers.service import (
     upload_file_to_printer,
 )
 from app.printers.service import upload_file_to_printer as _real_upload_file_to_printer
+from app.printers.service import (
+    enqueue_job_to_moonraker_queue as _real_enqueue_job_to_moonraker_queue,
+)
 
 _GCODE_CONTENT = b"G28\nG1 X10 Y10\n"
 
@@ -24,6 +27,13 @@ def _bind_upload_function(monkeypatch, tmp_path) -> str:
         "upload_file_to_printer",
         lambda printer_id, filename, file_content: _real_upload_file_to_printer(
             printer_id, filename, file_content, db_path=db_path
+        ),
+    )
+    monkeypatch.setattr(
+        printers_router_module,
+        "enqueue_job_to_moonraker_queue",
+        lambda printer_id, filename: _real_enqueue_job_to_moonraker_queue(
+            printer_id, filename, db_path=db_path
         ),
     )
     return db_path

@@ -466,6 +466,35 @@ def _job_row_to_dict(row: tuple) -> dict:
         "updated_at": updated_at,
     }
 
+def enqueue_job_to_moonraker_queue(
+    printer_id: int,
+    filename: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[bool]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        capabilities: List[str] = json.loads(row[8])
+        if "job_queue" not in capabilities:
+            return False
+
+        driver = _resolve_driver_for_row(row)
+        try:
+            driver.enqueue_job([filename])
+        except MoonrakerClientError as exc:
+            raise PrinterCommandError(
+                f"Lỗi khi đẩy job vào hàng đợi Moonraker của máy "
+                f"id={printer_id}: {exc}"
+            ) from exc
+    finally:
+        connection.close()
+
+    return True
+
 def confirm_printer(
     printer_id: int, db_path: str = DEFAULT_DB_PATH
 ) -> Optional[PrinterResponse]:

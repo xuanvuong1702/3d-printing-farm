@@ -24,6 +24,7 @@ from app.printers.service import (
     confirm_printer,
     delete_printer,
     emergency_stop_printer,
+    enqueue_job_to_moonraker_queue,
     list_printers,
     pause_print,
     power_off_printer,
@@ -211,4 +212,10 @@ async def upload_printer_file(
         raise HTTPException(
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
         )
+
+    try:
+        enqueue_job_to_moonraker_queue(printer_id, file.filename)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     return JobResponse(**result)
