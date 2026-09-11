@@ -57,6 +57,9 @@ class PrinterPowerNotConfiguredError(Exception):
 class PrinterNotHeldError(Exception):
     pass
 
+class UnsupportedFileTypeError(Exception):
+    pass
+
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
 ) -> PrinterResponse:
@@ -362,6 +365,106 @@ UPDATE printers
 SET is_held = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 """
+
+_GCODE_EXTENSION = ".gcode"
+
+_INSERT_JOB_UPLOADING_SQL = """
+INSERT INTO jobs (printer_id, filename, status) VALUES (?, ?, 'uploading')
+"""
+
+_SELECT_JOB_BY_ID_SQL = """
+SELECT id, printer_id, filename, status, priority, file_size_bytes,
+       estimated_print_seconds, created_at, updated_at
+FROM jobs WHERE id = ?
+"""
+
+_UPDATE_JOB_QUEUED_SQL = """
+UPDATE jobs
+SET status = 'queued', file_size_bytes = ?, estimated_print_seconds = ?,
+    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+_UPDATE_JOB_FAILED_SQL = """
+UPDATE jobs
+SET status = 'failed', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+def upload_file_to_printer(
+    printer_id: int,
+    filename: str,
+    file_content: bytes,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[dict]:
+    if not filename.lower().endswith(_GCODE_EXTENSION):
+        raise UnsupportedFileTypeError(
+            f"File {filename!r} không phải G-code (.gcode) - từ chối upload."
+        )
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        driver = _resolve_driver_for_row(row)
+
+        cursor = connection.execute(_INSERT_JOB_UPLOADING_SQL, (printer_id, filename))
+        connection.commit()
+        job_id = cursor.lastrowid
+
+        try:
+            driver.upload_file(filename, file_content)
+            metadata = driver.get_file_metadata(filename)
+        except MoonrakerClientError as exc:
+            connection.execute(_UPDATE_JOB_FAILED_SQL, (job_id,))
+            connection.commit()
+            raise PrinterCommandError(
+                f"Lỗi khi upload file lên máy id={printer_id}: {exc}"
+            ) from exc
+
+        file_size_bytes = metadata.get("size")
+        estimated_time = metadata.get("estimated_time")
+        estimated_print_seconds = (
+            int(estimated_time) if estimated_time is not None else None
+        )
+
+        connection.execute(
+            _UPDATE_JOB_QUEUED_SQL,
+            (file_size_bytes, estimated_print_seconds, job_id),
+        )
+        connection.commit()
+        job_row = connection.execute(_SELECT_JOB_BY_ID_SQL, (job_id,)).fetchone()
+    finally:
+        connection.close()
+
+    return _job_row_to_dict(job_row)
+
+def _job_row_to_dict(row: tuple) -> dict:
+    (
+        id_,
+        printer_id,
+        filename,
+        status,
+        priority,
+        file_size_bytes,
+        estimated_print_seconds,
+        created_at,
+        updated_at,
+    ) = row
+    return {
+        "id": id_,
+        "printer_id": printer_id,
+        "filename": filename,
+        "status": status,
+        "priority": priority,
+        "file_size_bytes": file_size_bytes,
+        "estimated_print_seconds": estimated_print_seconds,
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
 
 def confirm_printer(
     printer_id: int, db_path: str = DEFAULT_DB_PATH

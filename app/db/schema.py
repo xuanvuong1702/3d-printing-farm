@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS jobs (
             'finished', 'failed', 'cancelled'
         )),
     priority INTEGER NOT NULL DEFAULT 0,
+    file_size_bytes INTEGER,
+    estimated_print_seconds INTEGER,
     created_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at TEXT NOT NULL
