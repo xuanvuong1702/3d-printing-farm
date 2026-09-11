@@ -6,6 +6,7 @@ from typing import List
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
+    EmergencyStopRequest,
     PrinterCreateRequest,
     PrinterResponse,
     PrinterUpdateRequest,
@@ -16,6 +17,7 @@ from app.printers.service import (
     PrinterConnectionError,
     cancel_print,
     delete_printer,
+    emergency_stop_printer,
     list_printers,
     pause_print,
     register_printer,
@@ -112,6 +114,27 @@ def resume_printer_job(printer_id: int) -> PrinterResponse:
 def cancel_printer_job(printer_id: int) -> PrinterResponse:
     try:
         result = cancel_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post(
+    "/printers/{printer_id}/emergency_stop", response_model=PrinterResponse
+)
+def emergency_stop_printer_endpoint(
+    printer_id: int, request: EmergencyStopRequest
+) -> PrinterResponse:
+    if not request.confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="Cần xác nhận (confirm=true) trước khi gửi lệnh Emergency Stop.",
+        )
+    try:
+        result = emergency_stop_printer(printer_id)
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     if result is None:

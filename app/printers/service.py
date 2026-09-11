@@ -279,6 +279,13 @@ def cancel_print(
 ) -> Optional[PrinterResponse]:
     return _run_print_command(printer_id, db_path, lambda driver: driver.cancel_job())
 
+def emergency_stop_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_print_command(
+        printer_id, db_path, lambda driver: driver.emergency_stop()
+    )
+
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
         id_,

@@ -21,6 +21,10 @@ class PrinterUpdateRequest(BaseModel):
     model: Optional[str] = None
     api_key: Optional[str] = None
 
+class EmergencyStopRequest(BaseModel):
+
+    confirm: bool = False
+
 class PrinterResponse(BaseModel):
 
     id: int
