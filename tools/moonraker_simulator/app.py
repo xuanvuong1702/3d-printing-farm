@@ -125,6 +125,14 @@ RỘNG simulator hiện có thay vì tạo hạ tầng test riêng:
 - Đóng task nền khi client ngắt kết nối (`WebSocketDisconnect`) hoặc
   server chủ động đóng — tránh rò rỉ task nếu test mở/đóng nhiều kết
   nối liên tiếp (nhiều máy giả lập trong 1 tiến trình test).
+
+Quyết định chunk C2 của E3-2 (`docs/State_E3-2_v3.md` mục "CHUNK KẾ
+TIẾP CẦN CHẠY", "Quyết định phạm vi" #2/#3/#11) — thêm route `POST
+/printer/emergency_stop`, khớp `http_client.py::emergency_stop`
+(E3-2/C1): set `state.webhooks_state = "shutdown"`, KHÔNG đổi
+`print_stats_state` (không cần thiết, xem rationale đầy đủ ở state
+file trên) — tái dùng đúng field native `webhooks_state` đã có từ
+E0-5/C1, không thêm field mới vào `SimulatorState`.
 """
 
 from __future__ import annotations
@@ -317,6 +325,21 @@ def resume_print() -> dict:
     định C4).
     """
     state.print_stats_state = "printing"
+    return {"result": "ok"}
+
+@app.post("/printer/emergency_stop")
+def emergency_stop() -> dict:
+    """POST /printer/emergency_stop — khớp `http_client.py::emergency_stop`
+    (E3-2/C1).
+
+    Mô phỏng đúng hành vi Moonraker thật: đưa Klippy vào trạng thái
+    "shutdown" (`webhooks.state != 'ready'`), khiến `get_status()` map
+    ngay về `OFFLINE` (D-013) ở lần gọi kế tiếp — KHÔNG đổi
+    `print_stats_state` (không cần thiết, xem `docs/State_E3-2_v3.md`
+    "Quyết định phạm vi" #11: `get_status()` map OFFLINE ngay khi
+    `webhooks.state != 'ready'`, bất kể `print_stats.state`).
+    """
+    state.webhooks_state = "shutdown"
     return {"result": "ok"}
 
 _WS_BROADCAST_POLL_INTERVAL_SECONDS = 0.05
