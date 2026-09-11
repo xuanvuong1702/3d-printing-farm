@@ -181,6 +181,44 @@ def test_upload_bug_print_flag_via_query_param_is_silently_ignored(
     status = hc.get_status(HOST, port=simulator)
     assert status.canonical_status == hc.CANONICAL_IDLE
 
+def test_upload_file_does_not_start_print(simulator: int) -> None:
+    """`upload_file` (khác `upload_and_print`) không được làm đổi
+    `print_stats_state` - máy vẫn IDLE sau khi upload."""
+    result = hc.upload_file(HOST, "plate.gcode", b"; fake gcode content", port=simulator)
+    assert result["result"]["print_started"] is False
+
+    status = hc.get_status(HOST, port=simulator)
+    assert status.canonical_status == hc.CANONICAL_IDLE
+
+def test_upload_file_then_get_file_metadata_returns_matching_size(
+    simulator: int,
+) -> None:
+    content = b"; fake gcode content, 34 bytes!!!!"
+    hc.upload_file(HOST, "plate.gcode", content, port=simulator)
+
+    metadata = hc.get_file_metadata(HOST, "plate.gcode", port=simulator)
+
+    assert metadata["size"] == len(content)
+    assert metadata["filename"] == "plate.gcode"
+    assert metadata["estimated_time"] > 0
+
+def test_get_file_metadata_unknown_filename_raises_client_error(
+    simulator: int,
+) -> None:
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.get_file_metadata(HOST, "chua_tung_upload.gcode", port=simulator)
+
+def test_upload_and_print_also_populates_metadata(simulator: int) -> None:
+    """`upload_and_print` (đã có từ trước) CŨNG phải ghi lại size, vì
+    route upload dùng chung cho cả 2 hàm client (chỉ khác field
+    `print`) - đúng hành vi Moonraker thật (metadata tra được bất kể có
+    in hay không)."""
+    content = b"; fake"
+    hc.upload_and_print(HOST, "cube.gcode", content, port=simulator)
+
+    metadata = hc.get_file_metadata(HOST, "cube.gcode", port=simulator)
+    assert metadata["size"] == len(content)
+
 def test_simulator_state_is_reset_between_tests(simulator: int) -> None:
     status = hc.get_status(HOST, port=simulator)
     assert status.canonical_status == hc.CANONICAL_IDLE

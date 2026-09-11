@@ -19,9 +19,12 @@ cancel/pause/resume job, checkIfPrinting. KHÔNG bao gồm: kênh WebSocket
 (D-002 phần 2 / Q-001 - đã chốt dùng `moonraker-api`, nhưng việc tích hợp
 thư viện đó thuộc phạm vi story khác, vd. E2-1).
 
-Phạm vi E3-2/C1: `emergency_stop`. Phạm vi E3-3/C1 (chunk này):
-`set_device_power` - bật/tắt smart plug/device qua Machine/Power API
-(xem docstring hàm đó).
+Phạm vi E3-2/C1: `emergency_stop`. Phạm vi E3-3/C1: `set_device_power` -
+bật/tắt smart plug/device qua Machine/Power API (xem docstring hàm đó).
+
+Phạm vi E4-1/C1 (chunk này): `upload_file` (upload KHÔNG in ngay, khác
+`upload_and_print`) + `get_file_metadata` (kích thước/thời gian in ước
+tính) - xem docstring từng hàm.
 """
 
 from __future__ import annotations
@@ -242,6 +245,79 @@ def upload_and_print(
         timeout=UPLOAD_TIMEOUT_SECONDS,
         files=files,
         data=data,
+    )
+    return resp.json()
+
+def upload_file(
+    host: str,
+    filename: str,
+    file_content: bytes,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    """
+    POST /server/files/upload, multipart form-data - upload KHÔNG in ngay
+    (khác `upload_and_print` ở trên - hàm mới riêng, không thêm tham số
+    cho `upload_and_print` đã khoá, đúng nguyên tắc "khoá" mục 1
+    Loop-Controller). Dùng cho E4-1 (upload file G-code lên máy qua
+    dashboard, không yêu cầu in ngay).
+
+    Field `print` gửi TƯỜNG MINH = "false" (vẫn multipart form field,
+    cùng vị trí/kiểu với `upload_and_print`) - tài liệu Moonraker chính
+    thức (moonraker.readthedocs.io/en/latest/external_api/file_manager/,
+    mục "File upload") xác nhận default của field `print` vốn đã là
+    "false" nếu bỏ qua, nhưng gửi tường minh rõ ràng hơn, không phụ
+    thuộc ngầm vào giá trị mặc định (có thể đổi giữa các phiên bản
+    Moonraker) - xem docs/State_E4-1_v2.md "Quyết định phạm vi" điểm 1.
+    """
+    files = {"file": (filename, file_content)}
+    data = {"print": "false"}
+    resp = _request(
+        "POST",
+        host,
+        "/server/files/upload",
+        port=port,
+        api_key=api_key,
+        timeout=UPLOAD_TIMEOUT_SECONDS,
+        files=files,
+        data=data,
+    )
+    return resp.json()
+
+def get_file_metadata(
+    host: str,
+    filename: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    """
+    GET /server/files/metadata?filename=<filename> - lấy metadata file đã
+    upload (kích thước, thời gian in ước tính) - dùng cho E4-1.
+
+    Trả NGUYÊN response JSON (không tự parse thêm field cụ thể ở tầng
+    này - tầng service, E4-1/C2, chọn field `size`/`estimated_time` cần
+    dùng - xem docs/State_E4-1_v2.md "Quyết định phạm vi" điểm 2).
+
+    Xác nhận nguồn (E4-1/C1, KHÔNG nằm trong "Phụ lục: Checklist kỹ
+    thuật Moonraker" tham chiếu từ print-farm-manager - dự án đó không
+    dùng endpoint này): tài liệu Moonraker chính thức
+    (moonraker.readthedocs.io/en/latest/external_api/file_manager/, mục
+    "Get GCode Metadata") - response gồm `size` (bytes), `estimated_time`
+    (giây), cùng nhiều field khác (`slicer`, `filament_name`, ...) không
+    dùng tới ở phạm vi story này. QUAN TRỌNG: response KHÔNG có envelope
+    `{"result": {...}}` như các endpoint JSON-RPC-style khác
+    (`/server/info`, `/printer/info`, `/printer/objects/query`) - cùng
+    kiểu response phẳng như `upload_and_print`/`upload_file` ở trên
+    (cả 3 endpoint đều thuộc nhóm File Management, không bọc "result") -
+    do đó hàm này trả thẳng `resp.json()`, KHÔNG đọc `["result"]`.
+    """
+    resp = _request(
+        "GET",
+        host,
+        "/server/files/metadata",
+        port=port,
+        api_key=api_key,
+        params={"filename": filename},
     )
     return resp.json()
 

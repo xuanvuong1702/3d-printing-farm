@@ -165,6 +165,30 @@ mô phỏng Machine/Power API, khớp
   `device` chưa từng được set (không có trong dict) → trả `"off"` mặc
   định (không tạo mới trong dict qua đường đọc, khác đường ghi POST ở
   trên — đọc không có tác dụng phụ).
+
+Quyết định chunk C1 của E4-1 (`docs/State_E4-1_v2.md` mục "CHUNK KẾ
+TIẾP CẦN CHẠY", "Quyết định phạm vi" #1/#2) — thêm route `GET
+/server/files/metadata`, khớp `http_client.py::get_file_metadata`
+(E4-1/C1); MỞ RỘNG route `POST /server/files/upload` hiện có (không
+tạo route riêng — cùng endpoint Moonraker thật dùng chung cho cả
+`upload_and_print` lẫn `upload_file`):
+- Route upload hiện có nay LUÔN ghi `state.uploaded_files[file.filename]
+  = len(content)` (bất kể `print_flag`) — trước đây chỉ tính `size` để
+  trả trong response, không lưu lại; nay cần lưu để route metadata MỚI
+  tra cứu được, đúng hành vi Moonraker thật (file đã lưu vào đĩa thì
+  metadata tra được, không phụ thuộc có in hay không).
+- `GET /server/files/metadata?filename=<tên>`: nếu `filename` chưa có
+  trong `state.uploaded_files` → trả lỗi `404` (dùng `HTTPException`,
+  khác các route điều khiển C4 cũ vốn luôn trả `200` — đây là 1 truy
+  vấn có thể hợp lệ thất bại, không phải lệnh điều khiển "âm thầm bỏ
+  qua" như bug `print` flag) — khớp hành vi Moonraker thật khi file
+  không tồn tại. Nếu có, trả `size` (từ dict) + `estimated_time` suy
+  tuyến tính từ `size` qua hằng số `_SIMULATED_SECONDS_PER_BYTE` bên
+  dưới — KHÔNG mô phỏng chính xác vật lý (cùng tinh thần quyết định C4
+  cũ "không mô phỏng tốc độ in thật"), chỉ cần deterministic và đủ để
+  test luồng "upload → đọc lại metadata". Response KHÔNG bọc trong
+  `"result"` — đúng shape thật (xác nhận qua cùng nguồn tài liệu đã ghi
+  ở `http_client.py::get_file_metadata`).
 """
 
 from __future__ import annotations
@@ -173,7 +197,15 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel
 
 from tools.moonraker_simulator.state import SimulatorState
@@ -306,6 +338,8 @@ async def upload_file(
     Moonraker thật.
     """
     content = await file.read()
+
+    state.uploaded_files[file.filename] = len(content)
     if print_flag == "true":
         state.print_stats_state = "printing"
         state.print_stats_filename = file.filename
@@ -320,6 +354,33 @@ async def upload_file(
             },
             "print_started": print_flag == "true",
         }
+    }
+
+_SIMULATED_SECONDS_PER_BYTE = 0.01
+
+@app.get("/server/files/metadata")
+def get_file_metadata(filename: str) -> dict:
+    """
+    GET /server/files/metadata?filename=... — khớp
+    `http_client.py::get_file_metadata` (E4-1/C1).
+
+    404 nếu `filename` chưa từng được upload qua route `/server/files/
+    upload` ở trên (không có trong `state.uploaded_files`) — khớp hành
+    vi Moonraker thật khi file không tồn tại (xem docstring module).
+
+    Response KHÔNG bọc trong `"result"` (cùng shape phẳng như route
+    upload ở trên) — đúng shape thật đã xác nhận ở
+    `http_client.py::get_file_metadata`.
+    """
+    if filename not in state.uploaded_files:
+        raise HTTPException(
+            status_code=404, detail=f"File không tồn tại: {filename}"
+        )
+    size = state.uploaded_files[filename]
+    return {
+        "size": size,
+        "estimated_time": round(size * _SIMULATED_SECONDS_PER_BYTE, 1),
+        "filename": filename,
     }
 
 @app.post("/printer/gcode/script")

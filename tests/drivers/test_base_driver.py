@@ -79,6 +79,20 @@ def test_check_if_printing(simulator: int) -> None:
     driver.upload_and_print("cube.gcode", b"; fake")
     assert driver.check_if_printing() is True
 
+def test_upload_file_then_get_file_metadata(simulator: int) -> None:
+    """`driver.upload_file` (E4-1) không in ngay, và `driver.get_file_metadata`
+    đọc lại đúng size đã upload - đối chiếu với gọi thẳng `http_client`."""
+    driver = _driver(simulator)
+    content = b"; fake gcode content"
+
+    upload_result = driver.upload_file("plate.gcode", content)
+    assert upload_result["result"]["print_started"] is False
+    assert driver.get_status().canonical_status == hc.CANONICAL_IDLE
+
+    metadata = driver.get_file_metadata("plate.gcode")
+    assert metadata == hc.get_file_metadata(SIMULATOR_HOST, "plate.gcode", port=simulator)
+    assert metadata["size"] == len(content)
+
 def test_driver_instance_reusable_across_calls(simulator: int) -> None:
     """1 driver instance (host/port/api_key cố định ở constructor, quyết
     định thiết kế C1) dùng được cho nhiều lệnh gọi liên tiếp trên cùng 1

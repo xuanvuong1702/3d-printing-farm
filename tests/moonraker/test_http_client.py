@@ -245,6 +245,50 @@ def test_upload_and_print_sends_print_as_form_field_not_query_param():
 
     assert result == {"result": {"item": {"path": "gcodes/benchy.gcode"}}}
 
+@respx.mock
+def test_upload_file_sends_print_false_as_form_field():
+    route = respx.post(f"{BASE_URL}/server/files/upload").respond(
+        200, json={"result": {"item": {"path": "gcodes/plate.gcode"}}}
+    )
+
+    result = hc.upload_file(HOST, "plate.gcode", b"; fake gcode content", port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+
+    assert "print" not in sent_request.url.params
+
+    body = sent_request.content
+    assert b'name="print"' in body
+    assert b"false" in body
+    assert b'name="file"' in body
+    assert b"plate.gcode" in body
+
+    assert result == {"result": {"item": {"path": "gcodes/plate.gcode"}}}
+
+@respx.mock
+def test_get_file_metadata_sends_filename_as_query_param():
+    route = respx.get(f"{BASE_URL}/server/files/metadata").respond(
+        200, json={"size": 12345, "estimated_time": 678, "filename": "plate.gcode"}
+    )
+
+    result = hc.get_file_metadata(HOST, "plate.gcode", port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+    assert sent_request.url.params.get("filename") == "plate.gcode"
+
+    assert result == {"size": 12345, "estimated_time": 678, "filename": "plate.gcode"}
+
+@respx.mock
+def test_get_file_metadata_raises_on_404():
+    respx.get(f"{BASE_URL}/server/files/metadata").respond(
+        404, json={"error": {"message": "File không tồn tại"}}
+    )
+
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.get_file_metadata(HOST, "khong_ton_tai.gcode", port=PORT)
+
 @pytest.mark.parametrize(
     "func,path",
     [

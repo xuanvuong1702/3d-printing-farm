@@ -35,9 +35,9 @@ trong `http_client.py` ở E0-6 (không thêm phương thức nào ngoài nhu c�
 thật đã có bằng chứng — AC gốc E0-6 không yêu cầu tính năng nào khác):
 `get_server_info`, `get_printer_info`, `get_status`, `gcode_script`,
 `upload_and_print`, `cancel_job`, `pause_job`, `resume_job`,
-`check_if_printing`. Bổ sung `emergency_stop` (E3-2) và `set_power`
-(E3-3) ở các story sau, cùng nguyên tắc "chỉ thêm khi có bằng chứng nhu
-cầu thật từ AC".
+`check_if_printing`. Bổ sung `emergency_stop` (E3-2), `set_power`
+(E3-3), `upload_file` + `get_file_metadata` (E4-1) ở các story sau,
+cùng nguyên tắc "chỉ thêm khi có bằng chứng nhu cầu thật từ AC".
 """
 
 from __future__ import annotations
@@ -123,6 +123,18 @@ class PrinterDriver(ABC):
         thuộc `{"on", "off"}` (xem `docs/State_E3-3_v2.md` mục "Quyết
         định phạm vi" điểm 2 - không dùng `"toggle"`)."""
 
+    @abstractmethod
+    def upload_file(self, filename: str, file_content: bytes) -> dict:
+        """Upload file G-code lên máy, KHÔNG in ngay (E4-1) - khác
+        `upload_and_print` ở trên (endpoint HTTP giống nhau, field
+        `print` khác giá trị - xem `http_client.py::upload_file`)."""
+
+    @abstractmethod
+    def get_file_metadata(self, filename: str) -> dict:
+        """Lấy metadata của 1 file đã upload - kích thước (`size`) và
+        thời gian in ước tính (`estimated_time`), cùng các field khác
+        (E4-1) - xem `http_client.py::get_file_metadata`."""
+
 class BaseKlipperDriver(PrinterDriver):
     """
     Driver mặc định theo chuẩn Moonraker/Klipper (D-012 mục 1) — luôn
@@ -187,4 +199,14 @@ class BaseKlipperDriver(PrinterDriver):
     def set_power(self, device_name: str, action: str) -> dict:
         return http_client.set_device_power(
             self.host, device_name, action, port=self.port, api_key=self.api_key
+        )
+
+    def upload_file(self, filename: str, file_content: bytes) -> dict:
+        return http_client.upload_file(
+            self.host, filename, file_content, port=self.port, api_key=self.api_key
+        )
+
+    def get_file_metadata(self, filename: str) -> dict:
+        return http_client.get_file_metadata(
+            self.host, filename, port=self.port, api_key=self.api_key
         )
