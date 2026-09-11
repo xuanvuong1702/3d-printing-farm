@@ -65,6 +65,18 @@ def test_check_if_printing(simulator: int) -> None:
     driver.upload_and_print("cube.gcode", b"; fake")
     assert driver.check_if_printing() is True
 
+def test_upload_file_then_get_file_metadata(simulator: int) -> None:
+    driver = _driver(simulator)
+    content = b"; fake gcode content"
+
+    upload_result = driver.upload_file("plate.gcode", content)
+    assert upload_result["result"]["print_started"] is False
+    assert driver.get_status().canonical_status == hc.CANONICAL_IDLE
+
+    metadata = driver.get_file_metadata("plate.gcode")
+    assert metadata == hc.get_file_metadata(SIMULATOR_HOST, "plate.gcode", port=simulator)
+    assert metadata["size"] == len(content)
+
 def test_driver_instance_reusable_across_calls(simulator: int) -> None:
     driver = _driver(simulator)
     assert driver.get_status().canonical_status == hc.CANONICAL_IDLE

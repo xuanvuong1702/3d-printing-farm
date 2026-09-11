@@ -20,4 +20,6 @@ class SimulatorState:
     heater_bed_temperature: float = 25.0
     heater_bed_target: float = 0.0
 
+    uploaded_files: dict[str, int] = field(default_factory=dict)
+
     power_devices: dict[str, str] = field(default_factory=lambda: {"printer": "off"})

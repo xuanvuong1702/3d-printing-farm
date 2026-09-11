@@ -5,7 +5,15 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from pydantic import BaseModel
 
 from tools.moonraker_simulator.state import SimulatorState
@@ -91,6 +99,8 @@ async def upload_file(
     print_flag: str | None = Form(None, alias="print"),
 ) -> dict:
     content = await file.read()
+
+    state.uploaded_files[file.filename] = len(content)
     if print_flag == "true":
         state.print_stats_state = "printing"
         state.print_stats_filename = file.filename
@@ -105,6 +115,21 @@ async def upload_file(
             },
             "print_started": print_flag == "true",
         }
+    }
+
+_SIMULATED_SECONDS_PER_BYTE = 0.01
+
+@app.get("/server/files/metadata")
+def get_file_metadata(filename: str) -> dict:
+    if filename not in state.uploaded_files:
+        raise HTTPException(
+            status_code=404, detail=f"File không tồn tại: {filename}"
+        )
+    size = state.uploaded_files[filename]
+    return {
+        "size": size,
+        "estimated_time": round(size * _SIMULATED_SECONDS_PER_BYTE, 1),
+        "filename": filename,
     }
 
 @app.post("/printer/gcode/script")

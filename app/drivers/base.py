@@ -63,6 +63,14 @@ class PrinterDriver(ABC):
     def set_power(self, device_name: str, action: str) -> dict:
         pass
 
+    @abstractmethod
+    def upload_file(self, filename: str, file_content: bytes) -> dict:
+        pass
+
+    @abstractmethod
+    def get_file_metadata(self, filename: str) -> dict:
+        pass
+
 class BaseKlipperDriver(PrinterDriver):
 
     def get_server_info(self) -> dict:
@@ -114,4 +122,14 @@ class BaseKlipperDriver(PrinterDriver):
     def set_power(self, device_name: str, action: str) -> dict:
         return http_client.set_device_power(
             self.host, device_name, action, port=self.port, api_key=self.api_key
+        )
+
+    def upload_file(self, filename: str, file_content: bytes) -> dict:
+        return http_client.upload_file(
+            self.host, filename, file_content, port=self.port, api_key=self.api_key
+        )
+
+    def get_file_metadata(self, filename: str) -> dict:
+        return http_client.get_file_metadata(
+            self.host, filename, port=self.port, api_key=self.api_key
         )

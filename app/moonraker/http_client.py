@@ -183,6 +183,43 @@ def upload_and_print(
     )
     return resp.json()
 
+def upload_file(
+    host: str,
+    filename: str,
+    file_content: bytes,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    files = {"file": (filename, file_content)}
+    data = {"print": "false"}
+    resp = _request(
+        "POST",
+        host,
+        "/server/files/upload",
+        port=port,
+        api_key=api_key,
+        timeout=UPLOAD_TIMEOUT_SECONDS,
+        files=files,
+        data=data,
+    )
+    return resp.json()
+
+def get_file_metadata(
+    host: str,
+    filename: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    resp = _request(
+        "GET",
+        host,
+        "/server/files/metadata",
+        port=port,
+        api_key=api_key,
+        params={"filename": filename},
+    )
+    return resp.json()
+
 def cancel_job(
     host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
 ) -> dict:
