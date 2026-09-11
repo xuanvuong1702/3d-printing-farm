@@ -15,9 +15,11 @@ from app.printers.service import (
     PrinterAlreadyExistsError,
     PrinterCommandError,
     PrinterConnectionError,
+    PrinterNotHeldError,
     PrinterPowerNotConfiguredError,
     PrinterPowerNotSupportedError,
     cancel_print,
+    confirm_printer,
     delete_printer,
     emergency_stop_printer,
     list_printers,
@@ -141,6 +143,18 @@ def emergency_stop_printer_endpoint(
         result = emergency_stop_printer(printer_id)
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/confirm", response_model=PrinterResponse)
+def confirm_printer_endpoint(printer_id: int) -> PrinterResponse:
+    try:
+        result = confirm_printer(printer_id)
+    except PrinterNotHeldError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."

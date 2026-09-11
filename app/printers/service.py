@@ -54,6 +54,9 @@ class PrinterPowerNotSupportedError(Exception):
 class PrinterPowerNotConfiguredError(Exception):
     pass
 
+class PrinterNotHeldError(Exception):
+    pass
+
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
 ) -> PrinterResponse:
@@ -353,6 +356,39 @@ def power_off_printer(
     printer_id: int, db_path: str = DEFAULT_DB_PATH
 ) -> Optional[PrinterResponse]:
     return _run_power_command(printer_id, "off", db_path)
+
+_UPDATE_PRINTER_IS_HELD_SQL = """
+UPDATE printers
+SET is_held = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+def confirm_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        is_held = row[11]
+        if not is_held:
+            raise PrinterNotHeldError(
+                f"Máy id={printer_id} không đang ở trạng thái is_held, "
+                "không có gì để xác nhận."
+            )
+
+        connection.execute(_UPDATE_PRINTER_IS_HELD_SQL, (0, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
