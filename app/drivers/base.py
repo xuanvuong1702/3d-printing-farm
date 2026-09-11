@@ -106,6 +106,10 @@ class PrinterDriver(ABC):
     def check_if_printing(self) -> bool:
         """True nếu canonical status thuộc {PRINTING, PAUSED} (dùng ở D-011)."""
 
+    @abstractmethod
+    def emergency_stop(self) -> dict:
+        """Dừng khẩn cấp (E-Stop) - đưa Klippy vào trạng thái 'shutdown' (E3-2)."""
+
 class BaseKlipperDriver(PrinterDriver):
     """
     Driver mặc định theo chuẩn Moonraker/Klipper (D-012 mục 1) — luôn
@@ -159,5 +163,10 @@ class BaseKlipperDriver(PrinterDriver):
 
     def check_if_printing(self) -> bool:
         return http_client.check_if_printing(
+            self.host, port=self.port, api_key=self.api_key
+        )
+
+    def emergency_stop(self) -> dict:
+        return http_client.emergency_stop(
             self.host, port=self.port, api_key=self.api_key
         )

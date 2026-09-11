@@ -278,6 +278,30 @@ def resume_job(
     resp = _request("POST", host, "/printer/print/resume", port=port, api_key=api_key)
     return resp.json()
 
+def emergency_stop(
+    host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
+) -> dict:
+    """
+    POST /printer/emergency_stop - không cần body.
+
+    Xác nhận nguồn (chunk E3-2/C1, KHÔNG nằm trong "Phụ lục: Checklist kỹ
+    thuật Moonraker" tham chiếu từ print-farm-manager - dự án đó không có
+    tính năng E-Stop tách biệt khỏi cancel): tài liệu Moonraker chính thức
+    (moonraker.readthedocs.io/en/latest/external_api/printer/) mô tả
+    endpoint này là "immediately halt the printer and put it in a
+    'shutdown' state", khuyến nghị dùng cho nút Emergency Stop thay vì
+    gửi gcode `M112` qua hàng đợi ("Clients should not send M112 via
+    gcode... use the new API"), vì lệnh này không đi qua hàng đợi gcode -
+    đáng tin cậy hơn trong tình huống khẩn cấp. Đưa Klippy vào trạng thái
+    `webhooks.state != 'ready'`, khiến `get_status()` (đã có sẵn, KHÔNG
+    sửa ở đây) tự động trả `OFFLINE` ở lần gọi kế tiếp - không cần thêm
+    giá trị canonical mới hay sửa logic map hiện có (D-013).
+    """
+    resp = _request(
+        "POST", host, "/printer/emergency_stop", port=port, api_key=api_key
+    )
+    return resp.json()
+
 def check_if_printing(
     host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
 ) -> bool:
