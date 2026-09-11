@@ -45,6 +45,9 @@ class PrinterConnectionError(Exception):
 class PrinterAlreadyExistsError(Exception):
     pass
 
+class PrinterCommandError(Exception):
+    pass
+
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
 ) -> PrinterResponse:
@@ -195,6 +198,86 @@ def delete_printer(printer_id: int, db_path: str = DEFAULT_DB_PATH) -> str:
         connection.close()
 
     return "deleted"
+
+def _resolve_driver_for_row(row: tuple):
+    (
+        _id,
+        _name,
+        ip,
+        moonraker_port,
+        model,
+        api_key,
+        _moonraker_version,
+        klipper_version,
+        _capabilities_json,
+        _status,
+        _is_held,
+        _created_at,
+        _updated_at,
+    ) = row
+    return resolve_driver(
+        model=model,
+        firmware_version=klipper_version,
+        host=ip,
+        port=moonraker_port,
+        api_key=api_key,
+    )
+
+def _run_print_command(
+    printer_id: int, db_path: str, command
+) -> Optional[PrinterResponse]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        driver = _resolve_driver_for_row(row)
+        try:
+            command(driver)
+            canonical_status = driver.get_status().canonical_status
+        except MoonrakerClientError as exc:
+            raise PrinterCommandError(
+                f"Lỗi khi gọi lệnh điều khiển job trên máy id={printer_id}: {exc}"
+            ) from exc
+
+        connection.execute(_UPDATE_PRINTER_STATUS_SQL, (canonical_status, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
+
+def start_print(
+    printer_id: int,
+    filename: str,
+    file_content: bytes,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[PrinterResponse]:
+    return _run_print_command(
+        printer_id,
+        db_path,
+        lambda driver: driver.upload_and_print(filename, file_content),
+    )
+
+def pause_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_print_command(printer_id, db_path, lambda driver: driver.pause_job())
+
+def resume_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_print_command(printer_id, db_path, lambda driver: driver.resume_job())
+
+def cancel_print(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    return _run_print_command(printer_id, db_path, lambda driver: driver.cancel_job())
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     (
