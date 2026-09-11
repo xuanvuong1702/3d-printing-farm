@@ -59,6 +59,10 @@ class PrinterDriver(ABC):
     def emergency_stop(self) -> dict:
         pass
 
+    @abstractmethod
+    def set_power(self, device_name: str, action: str) -> dict:
+        pass
+
 class BaseKlipperDriver(PrinterDriver):
 
     def get_server_info(self) -> dict:
@@ -105,4 +109,9 @@ class BaseKlipperDriver(PrinterDriver):
     def emergency_stop(self) -> dict:
         return http_client.emergency_stop(
             self.host, port=self.port, api_key=self.api_key
+        )
+
+    def set_power(self, device_name: str, action: str) -> dict:
+        return http_client.set_device_power(
+            self.host, device_name, action, port=self.port, api_key=self.api_key
         )

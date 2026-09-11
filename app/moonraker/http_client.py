@@ -209,6 +209,23 @@ def emergency_stop(
     )
     return resp.json()
 
+def set_device_power(
+    host: str,
+    device: str,
+    action: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    resp = _request(
+        "POST",
+        host,
+        "/machine/device_power/device",
+        port=port,
+        api_key=api_key,
+        json={"device": device, "action": action},
+    )
+    return resp.json()
+
 def check_if_printing(
     host: str, port: int = DEFAULT_MOONRAKER_PORT, api_key: Optional[str] = None
 ) -> bool:

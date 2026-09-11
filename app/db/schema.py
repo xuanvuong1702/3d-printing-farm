@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS printers (
     moonraker_version TEXT,
     klipper_version TEXT,
     capabilities TEXT NOT NULL DEFAULT '{}',
+    power_device_name TEXT,
     status TEXT NOT NULL DEFAULT 'UNKNOWN'
         CHECK (status IN (
             'IDLE', 'PRINTING', 'PAUSED', 'FINISHED',
