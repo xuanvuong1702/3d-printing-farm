@@ -7,6 +7,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
     EmergencyStopRequest,
+    JobResponse,
     PrinterCreateRequest,
     PrinterResponse,
     PrinterUpdateRequest,
@@ -18,6 +19,7 @@ from app.printers.service import (
     PrinterNotHeldError,
     PrinterPowerNotConfiguredError,
     PrinterPowerNotSupportedError,
+    UnsupportedFileTypeError,
     cancel_print,
     confirm_printer,
     delete_printer,
@@ -30,6 +32,7 @@ from app.printers.service import (
     resume_print,
     start_print,
     update_printer,
+    upload_file_to_printer,
 )
 
 router = APIRouter()
@@ -188,3 +191,24 @@ def power_off_printer_endpoint(printer_id: int) -> PrinterResponse:
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
         )
     return result
+
+@router.post(
+    "/printers/{printer_id}/files",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_printer_file(
+    printer_id: int, file: UploadFile = File(...)
+) -> JobResponse:
+    file_content = await file.read()
+    try:
+        result = upload_file_to_printer(printer_id, file.filename, file_content)
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return JobResponse(**result)

@@ -42,3 +42,13 @@ class PrinterResponse(BaseModel):
     is_held: bool
     created_at: str
     updated_at: str
+
+class JobResponse(BaseModel):
+
+    id: int
+    printer_id: int
+    filename: str
+    status: str
+    file_size_bytes: Optional[int] = None
+    estimated_print_seconds: Optional[int] = None
+    created_at: str
