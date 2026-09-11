@@ -4,6 +4,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from app.dispatch.scheduler import start_dispatch_scheduler, stop_dispatch_scheduler
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
 from app.printers.router import router as printers_router
 from app.realtime.alerts import start_alert_watcher, stop_alert_watcher
@@ -14,6 +15,7 @@ from app.realtime.state import RealtimeStateStore
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     heartbeat_task = start_heartbeat_scheduler()
+    dispatch_task = start_dispatch_scheduler()
     realtime_store = RealtimeStateStore()
     app.state.realtime_store = realtime_store
     websocket_pool = start_websocket_pool(realtime_store)
@@ -23,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await stop_alert_watcher(alert_task)
         await stop_websocket_pool(websocket_pool)
+        await stop_dispatch_scheduler(dispatch_task)
         await stop_heartbeat_scheduler(heartbeat_task)
 
 app = FastAPI(title="QIDI Print Farm Orchestration Service", lifespan=lifespan)
