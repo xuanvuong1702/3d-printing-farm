@@ -120,6 +120,11 @@ def resume_print() -> dict:
     state.print_stats_state = "printing"
     return {"result": "ok"}
 
+@app.post("/printer/emergency_stop")
+def emergency_stop() -> dict:
+    state.webhooks_state = "shutdown"
+    return {"result": "ok"}
+
 _WS_BROADCAST_POLL_INTERVAL_SECONDS = 0.05
 
 def _websocket_status_snapshot(objects: List[str]) -> Dict[str, Dict[str, Any]]:
