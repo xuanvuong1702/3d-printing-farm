@@ -105,6 +105,17 @@ nhận rủi ro Klippy chưa kịp khởi động, ghi ở "Giới hạn/known i
 `get_status()` (dự kiến mất kết nối vì đã cắt điện board) và map
 thẳng `canonical_status = "OFFLINE"` — KHÔNG raise lỗi vì bản thân
 lệnh Power API đã thành công.
+
+Luồng `confirm_printer` (E3-4/C3) — xem `docs/State_E3-4_v2.md` mục
+"Quyết định phạm vi" #6 cho rationale đầy đủ (không lặp lại ở đây):
+SELECT máy theo `printer_id` (trả `None` nếu không có, router map
+404); `is_held = 0` → raise `PrinterNotHeldError` (router map 409,
+không có gì để xác nhận); `is_held = 1` → UPDATE `is_held = 0`
+(KHÔNG đụng cột `status`, khác mọi hàm điều khiển/power ở trên vốn
+luôn ghi đè `status`), trả `PrinterResponse` mới nhất. Đây là route
+DUY NHẤT (ngoài ngoại lệ tự gỡ hold ở `run_heartbeat_cycle` khi hồi
+phục `PRINTING` có job thật, `app/heartbeat/service.py`) được phép
+gỡ `is_held` (nguyên tắc #1 `CLAUDE.md`, D-010).
 """
 
 from __future__ import annotations
@@ -168,6 +179,11 @@ class PrinterPowerNotConfiguredError(Exception):
     hình qua `PATCH /printers/{printer_id}` (E3-3/C3, tầng router map
     sang HTTP 409 Conflict — thông điệp khác
     `PrinterPowerNotSupportedError`)."""
+
+class PrinterNotHeldError(Exception):
+    """Máy hiện KHÔNG đang ở trạng thái `is_held = 1` — không có gì để
+    vận hành viên xác nhận (E3-4/C3, D-010 điểm 6, tầng router map sang
+    HTTP 409 Conflict)."""
 
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
@@ -566,6 +582,50 @@ def power_off_printer(
     lỗi chỉ xảy ra ở bước đọc lại status sau đó — map `OFFLINE`, xem
     `_run_power_command`)."""
     return _run_power_command(printer_id, "off", db_path)
+
+_UPDATE_PRINTER_IS_HELD_SQL = """
+UPDATE printers
+SET is_held = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+def confirm_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    """"Xác nhận vận hành viên" — gỡ `is_held` sau khi operator đã xử lý
+    xong máy bị khoá do job `FINISHED`/`ERROR` (E3-4/C3, AC gốc E3-4,
+    D-010 điểm 6 — xem `docs/State_E3-4_v2.md` mục "Quyết định phạm
+    vi" #6 cho rationale đầy đủ, không lặp lại ở đây).
+
+    Trả `None` nếu không tìm thấy `printer_id` (router map 404). Raise
+    `PrinterNotHeldError` nếu máy hiện `is_held = 0` (không có gì để
+    xác nhận, router map 409). Nếu `is_held = 1`: UPDATE về `0`
+    (KHÔNG đụng cột `status` — chỉ gỡ hold, không đổi trạng thái máy,
+    khác `_run_print_command`/`_run_power_command`), trả
+    `PrinterResponse` mới nhất."""
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        is_held = row[11]
+        if not is_held:
+            raise PrinterNotHeldError(
+                f"Máy id={printer_id} không đang ở trạng thái is_held, "
+                "không có gì để xác nhận."
+            )
+
+        connection.execute(_UPDATE_PRINTER_IS_HELD_SQL, (0, printer_id))
+        connection.commit()
+        updated_row = connection.execute(
+            _SELECT_PRINTER_BY_ID_SQL, (printer_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+
+    return _row_to_response(updated_row)
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     """Chuyển 1 dòng SQL thô (thứ tự cột theo `_SELECT_PRINTER_BY_ID_SQL`)

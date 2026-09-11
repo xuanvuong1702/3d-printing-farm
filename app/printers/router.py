@@ -46,6 +46,16 @@ riêng). `None` → `404`; `PrinterPowerNotSupportedError`/
 mã); `PrinterCommandError` → `502` cùng tiền lệ. Xem
 `docs/State_E3-3_v2.md` mục "Quyết định phạm vi" #6-#9 cho rationale
 đầy đủ.
+
+`POST /printers/{printer_id}/confirm` (E3-4/C3) — "xác nhận vận hành
+viên", gỡ `is_held` sau khi operator đã xử lý xong máy bị khoá do job
+`FINISHED`/`ERROR` (AC gốc E3-4, D-010 điểm 6). Đặt NGOÀI namespace
+`/print/` (cùng tiền lệ `emergency_stop`/`power`), KHÔNG có body
+request (cùng tiền lệ `power`, E3-3 — AC gốc không yêu cầu xác nhận
+gì thêm trong body). `None` → `404`; `PrinterNotHeldError` (máy hiện
+`is_held = 0`, không có gì để xác nhận) → `409 Conflict`. Xem
+`docs/State_E3-4_v2.md` mục "Quyết định phạm vi" #6 cho rationale đầy
+đủ.
 """
 
 from __future__ import annotations
@@ -64,9 +74,11 @@ from app.printers.service import (
     PrinterAlreadyExistsError,
     PrinterCommandError,
     PrinterConnectionError,
+    PrinterNotHeldError,
     PrinterPowerNotConfiguredError,
     PrinterPowerNotSupportedError,
     cancel_print,
+    confirm_printer,
     delete_printer,
     emergency_stop_printer,
     list_printers,
@@ -218,6 +230,22 @@ def emergency_stop_printer_endpoint(
         result = emergency_stop_printer(printer_id)
     except PrinterCommandError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/confirm", response_model=PrinterResponse)
+def confirm_printer_endpoint(printer_id: int) -> PrinterResponse:
+    """"Xác nhận vận hành viên" — gỡ `is_held` sau khi operator đã xử lý
+    xong máy bị khoá do job `FINISHED`/`ERROR` (AC gốc E3-4, D-010 điểm
+    6). Không có body request (cùng tiền lệ `power`, xem docstring
+    module này)."""
+    try:
+        result = confirm_printer(printer_id)
+    except PrinterNotHeldError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
