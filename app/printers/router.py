@@ -18,13 +18,24 @@ tới tầng router ở đây.
 quả của `update_printer`/`delete_printer` sang `404`/`409` — không
 dùng exception cho nhánh nghiệp vụ "có job active" (xem
 `docs/State_E1-3_v2.md`).
+
+`POST /printers/{printer_id}/print/{start,pause,resume,cancel}`
+(E3-1/C2) map `None` → `404` (cùng tiền lệ PATCH/DELETE E1-3),
+`PrinterCommandError` (lỗi gọi Moonraker khi điều khiển job) → `502
+Bad Gateway` (mã mới, khác `422` của `PrinterConnectionError` ở
+`create_printer` — đây là lỗi xảy ra SAU khi máy đã đăng ký/đang vận
+hành, không phải lỗi validate lúc đăng ký). Xem
+`docs/State_E3-1_v3.md` mục "Quyết định phạm vi" #2-#5 cho rationale
+đầy đủ (không lặp lại ở đây): "start" chỉ hỗ trợ upload file mới +
+in ngay (multipart, field `file`), KHÔNG hỗ trợ start file đã có sẵn
+trên máy qua tên file (thuộc phạm vi E4-1).
 """
 
 from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
 from app.printers.schemas import (
     PrinterCreateRequest,
@@ -33,10 +44,15 @@ from app.printers.schemas import (
 )
 from app.printers.service import (
     PrinterAlreadyExistsError,
+    PrinterCommandError,
     PrinterConnectionError,
+    cancel_print,
     delete_printer,
     list_printers,
+    pause_print,
     register_printer,
+    resume_print,
+    start_print,
     update_printer,
 )
 
@@ -94,3 +110,61 @@ def remove_printer(printer_id: int) -> None:
             status_code=409,
             detail="Máy còn dữ liệu jobs/job_history liên quan, không thể xoá.",
         )
+
+@router.post("/printers/{printer_id}/print/start", response_model=PrinterResponse)
+async def start_printer_job(printer_id: int, file: UploadFile = File(...)) -> PrinterResponse:
+    """Upload G-code + in ngay trên máy `printer_id` (AC gốc E3-1, phần
+    "start") — KHÔNG hỗ trợ start file đã có sẵn trên máy qua tên file
+    (xem docstring module này/`docs/State_E3-1_v3.md`)."""
+    file_content = await file.read()
+    try:
+        result = start_print(printer_id, file.filename, file_content)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/pause", response_model=PrinterResponse)
+def pause_printer_job(printer_id: int) -> PrinterResponse:
+    """Tạm dừng job đang in trên máy `printer_id` (AC gốc E3-1, phần
+    "pause")."""
+    try:
+        result = pause_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/resume", response_model=PrinterResponse)
+def resume_printer_job(printer_id: int) -> PrinterResponse:
+    """Tiếp tục job đang tạm dừng trên máy `printer_id` (AC gốc E3-1,
+    phần "resume")."""
+    try:
+        result = resume_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
+
+@router.post("/printers/{printer_id}/print/cancel", response_model=PrinterResponse)
+def cancel_printer_job(printer_id: int) -> PrinterResponse:
+    """Huỷ job đang in trên máy `printer_id` (AC gốc E3-1, phần
+    "cancel")."""
+    try:
+        result = cancel_print(printer_id)
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return result
