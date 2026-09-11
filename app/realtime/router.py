@@ -1,12 +1,11 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
-from app.realtime.alerts import PrinterEventResponse, list_printer_events
 from app.realtime.schemas import PrinterRealtimeResponse
 from app.realtime.service import (
     get_printer_realtime,
@@ -43,9 +42,3 @@ async def stream_printers_realtime(request: Request) -> StreamingResponse:
         ),
         media_type="text/event-stream",
     )
-
-@router.get("/printers/events", response_model=List[PrinterEventResponse])
-def list_printer_events_endpoint(
-    printer_id: Optional[int] = None, limit: int = 50
-) -> List[PrinterEventResponse]:
-    return list_printer_events(printer_id=printer_id, limit=limit)
