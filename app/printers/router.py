@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
+from app.printers.auto_assign import NoAvailablePrinterError, auto_assign_and_upload
 from app.printers.schemas import (
     EmergencyStopRequest,
     JobResponse,
@@ -192,6 +193,29 @@ def power_off_printer_endpoint(printer_id: int) -> PrinterResponse:
             status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
         )
     return result
+
+@router.post(
+    "/printers/auto-assign/files",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def auto_assign_printer_file(
+    request: Request, file: UploadFile = File(...)
+) -> JobResponse:
+    file_content = await file.read()
+    try:
+        result = await auto_assign_and_upload(
+            filename=file.filename,
+            file_content=file_content,
+            store=request.app.state.realtime_store,
+        )
+    except NoAvailablePrinterError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return JobResponse(**result)
 
 @router.post(
     "/printers/{printer_id}/files",

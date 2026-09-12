@@ -6,6 +6,7 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
+import app.printers.router as printers_router_module
 from app.db.migrate import run_migrations
 from app.moonraker.http_client import get_job_queue_status
 from app.printers.auto_assign import (
@@ -15,6 +16,7 @@ from app.printers.auto_assign import (
     auto_assign_and_upload,
     select_auto_assign_printer,
 )
+from app.printers.auto_assign import auto_assign_and_upload as _real_auto_assign_and_upload
 from app.realtime.state import RealtimePrinterState, RealtimeStateStore
 
 import pytest
@@ -216,3 +218,67 @@ def test_auto_assign_enqueues_when_job_queue_supported(
 
     queue_status = get_job_queue_status("127.0.0.1", port=simulator)
     assert queue_status["queued_jobs"] == [{"filename": "test.gcode"}]
+
+def _bind_auto_assign_function(monkeypatch, tmp_path) -> str:
+    db_path = str(tmp_path / "test_printers.db")
+
+    async def _auto_assign_and_upload_with_tmp_db(filename, file_content, store):
+        return await _real_auto_assign_and_upload(
+            filename=filename,
+            file_content=file_content,
+            store=store,
+            db_path=db_path,
+        )
+
+    monkeypatch.setattr(
+        printers_router_module,
+        "auto_assign_and_upload",
+        _auto_assign_and_upload_with_tmp_db,
+    )
+    return db_path
+
+def test_auto_assign_route_happy_path_returns_201(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    printer = _register_one_printer(client, "127.0.0.1", simulator)
+    _set_printer_status(db_path, printer["id"], "IDLE")
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("test.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["printer_id"] == printer["id"]
+    assert body["filename"] == "test.gcode"
+    assert body["status"] == "queued"
+
+def test_auto_assign_route_no_candidates_returns_409(
+    client: TestClient, tmp_path, monkeypatch
+) -> None:
+    _bind_auto_assign_function(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("test.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code == 409
+
+def test_auto_assign_route_not_shadowed_by_printer_id_route(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    printer = _register_one_printer(client, "127.0.0.1", simulator)
+    _set_printer_status(db_path, printer["id"], "IDLE")
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("test.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code != 422
+    assert response.status_code == 201
+    assert response.json()["printer_id"] == printer["id"]
