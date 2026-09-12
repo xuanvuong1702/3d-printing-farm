@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
+import app.main as main_module
+from app.dispatch.service import run_dispatch_cycle
 from fastapi.testclient import TestClient
 
 import app.printers.router as printers_router_module
@@ -282,3 +285,156 @@ def test_auto_assign_route_not_shadowed_by_printer_id_route(
     assert response.status_code != 422
     assert response.status_code == 201
     assert response.json()["printer_id"] == printer["id"]
+
+_NO_JOB_QUEUE_CAPABILITIES = ["klippy_connection", "file_manager"]
+
+def _insert_queued_job(db_path: str, printer_id: int, filename: str) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "INSERT INTO jobs (printer_id, filename) VALUES (?, ?)",
+            (printer_id, filename),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def _set_printer_held(db_path: str, printer_id: int, is_held: bool) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET is_held = ? WHERE id = ?",
+            (1 if is_held else 0, printer_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def _clear_job_queue_capability(db_path: str, printer_id: int) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET capabilities = ? WHERE id = ?",
+            (json.dumps(_NO_JOB_QUEUE_CAPABILITIES), printer_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def test_auto_assign_e2e_tier1_prefers_shortest_queue_via_route(
+    client: TestClient, simulator_factory, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    handle_busy = simulator_factory(host="127.0.0.1")
+    handle_free = simulator_factory(host="127.0.0.2")
+
+    printer_busy = _register_one_printer(client, "127.0.0.1", handle_busy.port, "Busy")
+    printer_free = _register_one_printer(client, "127.0.0.2", handle_free.port, "Free")
+    _set_printer_status(db_path, printer_busy["id"], "IDLE")
+    _set_printer_status(db_path, printer_free["id"], "IDLE")
+    _insert_queued_job(db_path, printer_busy["id"], "existing.gcode")
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("new.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["printer_id"] == printer_free["id"]
+    assert body["filename"] == "new.gcode"
+
+    queue_status = get_job_queue_status("127.0.0.2", port=handle_free.port)
+    assert queue_status["queued_jobs"] == [{"filename": "new.gcode"}]
+
+def test_auto_assign_e2e_tier2_prefers_least_time_remaining_via_route(
+    client: TestClient, simulator_factory, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    handle_a = simulator_factory(host="127.0.0.1")
+    handle_b = simulator_factory(host="127.0.0.2")
+
+    printer_a = _register_one_printer(client, "127.0.0.1", handle_a.port, "A")
+    printer_b = _register_one_printer(client, "127.0.0.2", handle_b.port, "B")
+    _set_printer_status(db_path, printer_a["id"], "PRINTING")
+    _set_printer_status(db_path, printer_b["id"], "PRINTING")
+
+    def _state(time_remaining_seconds: int) -> RealtimePrinterState:
+        return RealtimePrinterState(
+            canonical_status="PRINTING",
+            progress_percent=50,
+            time_remaining_seconds=time_remaining_seconds,
+            filename="other.gcode",
+            extruder_temp=None,
+            extruder_target=None,
+            bed_temp=None,
+            bed_target=None,
+            updated_at="2026-09-12T00:00:00Z",
+        )
+
+    real_store = main_module.app.state.realtime_store
+    asyncio.run(real_store.set(printer_a["id"], _state(600)))
+    asyncio.run(real_store.set(printer_b["id"], _state(120)))
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("new.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["printer_id"] == printer_b["id"]
+
+def test_auto_assign_e2e_all_offline_or_held_returns_409(
+    client: TestClient, simulator_factory, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    handle_offline = simulator_factory(host="127.0.0.1")
+    handle_idle_held = simulator_factory(host="127.0.0.2")
+    handle_printing_held = simulator_factory(host="127.0.0.3")
+
+    _register_one_printer(client, "127.0.0.1", handle_offline.port, "Offline")
+
+    printer_idle_held = _register_one_printer(
+        client, "127.0.0.2", handle_idle_held.port, "IdleHeld"
+    )
+    _set_printer_status(db_path, printer_idle_held["id"], "IDLE")
+    _set_printer_held(db_path, printer_idle_held["id"], True)
+
+    printer_printing_held = _register_one_printer(
+        client, "127.0.0.3", handle_printing_held.port, "PrintingHeld"
+    )
+    _set_printer_status(db_path, printer_printing_held["id"], "PRINTING")
+    _set_printer_held(db_path, printer_printing_held["id"], True)
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("new.gcode", _GCODE_CONTENT)},
+    )
+
+    assert response.status_code == 409
+
+def test_auto_assign_e2e_no_job_queue_dispatches_via_run_dispatch_cycle(
+    client: TestClient, simulator: int, tmp_path, monkeypatch
+) -> None:
+    db_path = _bind_auto_assign_function(monkeypatch, tmp_path)
+    printer = _register_one_printer(client, "127.0.0.1", simulator)
+    _set_printer_status(db_path, printer["id"], "IDLE")
+    _clear_job_queue_capability(db_path, printer["id"])
+
+    response = client.post(
+        "/printers/auto-assign/files",
+        files={"file": ("new.gcode", _GCODE_CONTENT)},
+    )
+    assert response.status_code == 201
+    job_id = response.json()["id"]
+
+    run_dispatch_cycle(db_path=db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        (job_status,) = connection.execute(
+            "SELECT status FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+    assert job_status == "printing"
