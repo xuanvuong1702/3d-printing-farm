@@ -8,12 +8,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db.migrate import run_migrations
+from app.dispatch.service import run_dispatch_cycle
 from app.moonraker.http_client import get_job_queue_status
 from app.printers.service import (
     InvalidReorderError,
     PrinterCommandError,
     reorder_printer_queue,
+    upload_file_to_printer,
 )
+
+_GCODE_CONTENT = b"G28\nG1 X10 Y10\n"
 
 def _register_one_printer(
     client: TestClient, ip: str, port: int, name: str = "Printer E4-4"
@@ -70,6 +74,27 @@ def _read_priorities(db_path: str, job_ids: list[int]) -> dict[int, int]:
             job_ids,
         ).fetchall()
         return dict(rows)
+    finally:
+        connection.close()
+
+def _set_printer_status(db_path: str, printer_id: int, status: str) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET status = ? WHERE id = ?", (status, printer_id)
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+def _set_printer_held(db_path: str, printer_id: int, is_held: bool) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE printers SET is_held = ? WHERE id = ?",
+            (1 if is_held else 0, printer_id),
+        )
+        connection.commit()
     finally:
         connection.close()
 
@@ -297,3 +322,68 @@ def test_reorder_route_not_found_returns_404(
     )
 
     assert response.status_code == 404
+
+def test_reorder_branch_b_e2e_dispatch_respects_new_priority_order(
+    client: TestClient, simulator: int, tmp_path
+) -> None:
+    db_path = str(tmp_path / "test_printers.db")
+    printer = _register_one_printer(client, "127.0.0.1", simulator)
+    printer_id = printer["id"]
+    _clear_job_queue_capability(db_path, printer_id)
+    _set_printer_status(db_path, printer_id, "IDLE")
+
+    job_1 = upload_file_to_printer(
+        printer_id, "a.gcode", _GCODE_CONTENT, db_path=db_path
+    )["id"]
+    job_2 = upload_file_to_printer(
+        printer_id, "b.gcode", _GCODE_CONTENT, db_path=db_path
+    )["id"]
+
+    result = reorder_printer_queue(printer_id, [job_2, job_1], db_path=db_path)
+    assert [job["id"] for job in result] == [job_2, job_1]
+
+    run_dispatch_cycle(db_path=db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        statuses = dict(
+            connection.execute(
+                "SELECT id, status FROM jobs WHERE id IN (?, ?)", (job_1, job_2)
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+
+    assert statuses[job_2] == "printing"
+    assert statuses[job_1] == "queued"
+
+def test_reorder_allowed_when_printer_is_held_but_not_dispatched(
+    client: TestClient, simulator: int, tmp_path
+) -> None:
+    db_path = str(tmp_path / "test_printers.db")
+    printer = _register_one_printer(client, "127.0.0.1", simulator)
+    printer_id = printer["id"]
+    _clear_job_queue_capability(db_path, printer_id)
+    _set_printer_status(db_path, printer_id, "IDLE")
+    _set_printer_held(db_path, printer_id, True)
+
+    job_1 = _insert_queued_job(db_path, printer_id, "a.gcode")
+    job_2 = _insert_queued_job(db_path, printer_id, "b.gcode")
+
+    result = reorder_printer_queue(printer_id, [job_2, job_1], db_path=db_path)
+    assert [job["id"] for job in result] == [job_2, job_1]
+
+    run_dispatch_cycle(db_path=db_path)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        statuses = dict(
+            connection.execute(
+                "SELECT id, status FROM jobs WHERE id IN (?, ?)", (job_1, job_2)
+            ).fetchall()
+        )
+    finally:
+        connection.close()
+
+    assert statuses[job_1] == "queued"
+    assert statuses[job_2] == "queued"
