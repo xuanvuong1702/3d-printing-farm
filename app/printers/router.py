@@ -12,8 +12,10 @@ from app.printers.schemas import (
     PrinterCreateRequest,
     PrinterResponse,
     PrinterUpdateRequest,
+    ReorderQueueRequest,
 )
 from app.printers.service import (
+    InvalidReorderError,
     PrinterAlreadyExistsError,
     PrinterCommandError,
     PrinterConnectionError,
@@ -31,6 +33,7 @@ from app.printers.service import (
     power_off_printer,
     power_on_printer,
     register_printer,
+    reorder_printer_queue,
     resume_print,
     start_print,
     update_printer,
@@ -243,3 +246,22 @@ async def upload_printer_file(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return JobResponse(**result)
+
+@router.post(
+    "/printers/{printer_id}/queue/reorder",
+    response_model=List[JobResponse],
+)
+def reorder_printer_queue_endpoint(
+    printer_id: int, request: ReorderQueueRequest
+) -> List[JobResponse]:
+    try:
+        result = reorder_printer_queue(printer_id, request.job_ids)
+    except InvalidReorderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except PrinterCommandError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(
+            status_code=404, detail=f"Không tìm thấy máy in id={printer_id}."
+        )
+    return [JobResponse(**job) for job in result]

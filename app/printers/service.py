@@ -60,6 +60,9 @@ class PrinterNotHeldError(Exception):
 class UnsupportedFileTypeError(Exception):
     pass
 
+class InvalidReorderError(Exception):
+    pass
+
 def register_printer(
     request: PrinterCreateRequest, db_path: str = DEFAULT_DB_PATH
 ) -> PrinterResponse:
@@ -521,6 +524,68 @@ def confirm_printer(
         connection.close()
 
     return _row_to_response(updated_row)
+
+_SELECT_QUEUED_JOBS_BY_PRINTER_SQL = """
+SELECT id, filename FROM jobs WHERE printer_id = ? AND status = 'queued'
+"""
+
+_UPDATE_JOB_PRIORITY_SQL = """
+UPDATE jobs
+SET priority = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?
+"""
+
+def reorder_printer_queue(
+    printer_id: int,
+    job_ids: List[int],
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[List[dict]]:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+        if row is None:
+            return None
+
+        queued_rows = connection.execute(
+            _SELECT_QUEUED_JOBS_BY_PRINTER_SQL, (printer_id,)
+        ).fetchall()
+        queued_filename_by_id = {job_id: filename for job_id, filename in queued_rows}
+
+        if len(job_ids) != len(set(job_ids)) or set(job_ids) != set(
+            queued_filename_by_id
+        ):
+            raise InvalidReorderError(
+                f"job_ids {job_ids!r} không phải hoán vị đầy đủ hợp lệ của "
+                f"tập job 'queued' hiện có của máy id={printer_id}."
+            )
+
+        capabilities: List[str] = json.loads(row[8])
+        if "job_queue" in capabilities:
+            filenames = [queued_filename_by_id[job_id] for job_id in job_ids]
+            driver = _resolve_driver_for_row(row)
+            try:
+                driver.enqueue_job(filenames, reset=True)
+            except MoonrakerClientError as exc:
+                raise PrinterCommandError(
+                    f"Lỗi khi gọi lại enqueue_job (reset=True) để reorder "
+                    f"hàng đợi Moonraker của máy id={printer_id}: {exc}"
+                ) from exc
+        else:
+            total = len(job_ids)
+            for index, job_id in enumerate(job_ids):
+                priority = total - index
+                connection.execute(_UPDATE_JOB_PRIORITY_SQL, (priority, job_id))
+            connection.commit()
+
+        result_rows = [
+            connection.execute(_SELECT_JOB_BY_ID_SQL, (job_id,)).fetchone()
+            for job_id in job_ids
+        ]
+    finally:
+        connection.close()
+
+    return [_job_row_to_dict(job_row) for job_row in result_rows]
 
 def _row_to_response(row: tuple) -> PrinterResponse:
     (

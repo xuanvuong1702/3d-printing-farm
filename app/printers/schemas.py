@@ -52,3 +52,7 @@ class JobResponse(BaseModel):
     file_size_bytes: Optional[int] = None
     estimated_print_seconds: Optional[int] = None
     created_at: str
+
+class ReorderQueueRequest(BaseModel):
+
+    job_ids: List[int]
