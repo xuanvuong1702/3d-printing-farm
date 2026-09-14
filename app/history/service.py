@@ -6,6 +6,10 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from app.db.migrate import DEFAULT_DB_PATH
+from app.drivers import resolve_driver
+from app.moonraker.http_client import MoonrakerClientError
+
 logger = logging.getLogger(__name__)
 
 _NATIVE_TO_CANONICAL_STATUS = {
@@ -45,6 +49,15 @@ SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?
 """
 
+_SELECT_ALL_PRINTERS_SQL = """
+SELECT id, ip, moonraker_port, model, api_key, klipper_version
+FROM printers
+"""
+
+_SELECT_LATEST_HISTORY_CREATED_AT_SQL = """
+SELECT MAX(created_at) FROM job_history WHERE printer_id = ?
+"""
+
 def map_native_history_status(native: str) -> Optional[str]:
     if native == _NATIVE_STATUS_IN_PROGRESS:
         return None
@@ -69,6 +82,13 @@ def _unix_time_to_iso8601(value: Optional[float]) -> Optional[str]:
     return datetime.fromtimestamp(value, tz=timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+
+def _iso8601_to_unix_time(value: Optional[str]) -> Optional[float]:
+    if value is None:
+        return None
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    ).timestamp()
 
 def sync_job_history_entry(
     conn: sqlite3.Connection, printer_id: int, entry: dict[str, Any]
@@ -144,3 +164,45 @@ def sync_job_history_entry(
     )
     conn.execute(_UPDATE_JOB_STATUS_SQL, (canonical_status, job_id))
     conn.commit()
+
+def run_history_sync_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("PRAGMA foreign_keys = ON")
+        printer_rows = connection.execute(_SELECT_ALL_PRINTERS_SQL).fetchall()
+
+        for (
+            printer_id,
+            ip,
+            moonraker_port,
+            model,
+            api_key,
+            klipper_version,
+        ) in printer_rows:
+            (latest_created_at,) = connection.execute(
+                _SELECT_LATEST_HISTORY_CREATED_AT_SQL, (printer_id,)
+            ).fetchone()
+            since = _iso8601_to_unix_time(latest_created_at)
+
+            driver = resolve_driver(
+                model=model,
+                firmware_version=klipper_version,
+                host=ip,
+                port=moonraker_port,
+                api_key=api_key,
+            )
+
+            try:
+                response = driver.get_history_list(since=since)
+            except MoonrakerClientError:
+                logger.exception(
+                    "Lỗi khi lấy job history từ máy id=%s - bỏ qua máy "
+                    "này ở vòng đồng bộ hiện tại, tiếp tục máy khác.",
+                    printer_id,
+                )
+                continue
+
+            for entry in response.get("jobs", []):
+                sync_job_history_entry(connection, printer_id, entry)
+    finally:
+        connection.close()
