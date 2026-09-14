@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS job_history (
     start_time TEXT,
     end_time TEXT,
     spool_id TEXT,
+    moonraker_job_id TEXT,
     created_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 )
