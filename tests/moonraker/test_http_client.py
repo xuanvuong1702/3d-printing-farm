@@ -399,6 +399,57 @@ def test_start_uploaded_print_raises_on_404_file_not_found():
         hc.start_uploaded_print(HOST, "khong_ton_tai.gcode", port=PORT)
 
 @respx.mock
+def test_get_spoolman_spool_sends_correct_proxy_body():
+    route = respx.post(f"{BASE_URL}/server/spoolman/proxy").respond(
+        200,
+        json={
+            "response": {
+                "filament": {"material": "PLA", "name": "Red"},
+                "used_weight": 123.4,
+                "remaining_weight": 876.6,
+            },
+            "error": None,
+        },
+    )
+
+    result = hc.get_spoolman_spool(HOST, "42", port=PORT)
+
+    assert route.called
+    sent_request = route.calls.last.request
+    body = json.loads(sent_request.content)
+    assert body == {
+        "use_v2_response": True,
+        "request_method": "GET",
+        "path": "/v1/spool/42",
+    }
+
+    assert result == {
+        "response": {
+            "filament": {"material": "PLA", "name": "Red"},
+            "used_weight": 123.4,
+            "remaining_weight": 876.6,
+        },
+        "error": None,
+    }
+
+@respx.mock
+def test_get_spoolman_spool_returns_error_envelope_without_raising():
+    respx.post(f"{BASE_URL}/server/spoolman/proxy").respond(
+        200,
+        json={
+            "response": None,
+            "error": {"status_code": 404, "message": "Spool not found"},
+        },
+    )
+
+    result = hc.get_spoolman_spool(HOST, "khong_ton_tai", port=PORT)
+
+    assert result == {
+        "response": None,
+        "error": {"status_code": 404, "message": "Spool not found"},
+    }
+
+@respx.mock
 def test_request_sends_api_key_header_when_provided():
     route = respx.get(f"{BASE_URL}/server/info").respond(
         200, json={"result": {"klippy_connected": True}}
