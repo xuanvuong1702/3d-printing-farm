@@ -13,6 +13,7 @@ from app.realtime.pool import start_websocket_pool, stop_websocket_pool
 from app.realtime.router import router as realtime_router
 from app.realtime.state import RealtimeStateStore
 from app.reports.router import router as reports_router
+from app.spools.router import router as spools_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -36,6 +37,7 @@ app = FastAPI(title="QIDI Print Farm Orchestration Service", lifespan=lifespan)
 app.include_router(printers_router)
 app.include_router(realtime_router)
 app.include_router(reports_router)
+app.include_router(spools_router)
 
 @app.get("/")
 def read_root() -> dict:
