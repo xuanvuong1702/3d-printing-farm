@@ -26,3 +26,5 @@ class SimulatorState:
 
     job_queue_state: str = "ready"
     job_queue: list[str] = field(default_factory=list)
+
+    history_entries: list[dict] = field(default_factory=list)

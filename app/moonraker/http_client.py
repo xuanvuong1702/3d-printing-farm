@@ -310,3 +310,24 @@ def start_uploaded_print(
     )
     return resp.json()
 
+def get_history_list(
+    host: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+    *,
+    limit: int = 50,
+    since: Optional[float] = None,
+) -> dict:
+    params: dict[str, Any] = {"limit": limit}
+    if since is not None:
+        params["since"] = since
+    resp = _request(
+        "GET",
+        host,
+        "/server/history/list",
+        port=port,
+        api_key=api_key,
+        params=params,
+    )
+    return resp.json()
+

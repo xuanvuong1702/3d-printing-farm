@@ -83,6 +83,12 @@ class PrinterDriver(ABC):
     def start_uploaded_print(self, filename: str) -> str:
         pass
 
+    @abstractmethod
+    def get_history_list(
+        self, limit: int = 50, since: Optional[float] = None
+    ) -> dict:
+        pass
+
 class BaseKlipperDriver(PrinterDriver):
 
     def get_server_info(self) -> dict:
@@ -163,4 +169,11 @@ class BaseKlipperDriver(PrinterDriver):
     def start_uploaded_print(self, filename: str) -> str:
         return http_client.start_uploaded_print(
             self.host, filename, port=self.port, api_key=self.api_key
+        )
+
+    def get_history_list(
+        self, limit: int = 50, since: Optional[float] = None
+    ) -> dict:
+        return http_client.get_history_list(
+            self.host, port=self.port, api_key=self.api_key, limit=limit, since=since
         )

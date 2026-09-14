@@ -166,6 +166,14 @@ def start_uploaded_print(filename: str) -> str:
     state.virtual_sdcard_progress = 0.0
     return "ok"
 
+@app.get("/server/history/list")
+def get_history_list(limit: int = 50, since: float | None = None) -> dict:
+    entries = state.history_entries
+    if since is not None:
+        entries = [e for e in entries if e.get("start_time", 0) > since]
+    entries = entries[:limit]
+    return {"count": len(entries), "jobs": entries}
+
 @app.post("/printer/gcode/script")
 def gcode_script(script: str = "") -> dict:
     return {"result": "ok"}
