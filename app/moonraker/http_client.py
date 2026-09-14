@@ -331,3 +331,23 @@ def get_history_list(
     )
     return resp.json()
 
+def get_spoolman_spool(
+    host: str,
+    spool_id: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> dict:
+    resp = _request(
+        "POST",
+        host,
+        "/server/spoolman/proxy",
+        port=port,
+        api_key=api_key,
+        json={
+            "use_v2_response": True,
+            "request_method": "GET",
+            "path": f"/v1/spool/{spool_id}",
+        },
+    )
+    return resp.json()
+
