@@ -1,0 +1,124 @@
+/*
+ * QIDI Print Farm Dashboard — style nền tảng (E6-1/C1).
+ *
+ * Nguồn duy nhất cho GIÁ TRỊ màu/typography: docs/UI-Style-Guide.md
+ * (mục 1 bảng màu, mục 4 typography) — không tự đổi giá trị ở đây khi
+ * style guide đổi, sửa ở style guide trước rồi đồng bộ lại file này.
+ *
+ * Phạm vi C1: biến CSS (custom properties) + layout khung top bar/nav
+ * (style guide mục 2). CHƯA có: grid card máy in thật (C2), responsive
+ * breakpoint đầy đủ + trạng thái realtime_connected=False (C3, style
+ * guide mục 5).
+ */
+
+:root {
+    /* Bảng màu chung (UI-Style-Guide.md mục 1) */
+    --accent-primary: #2196c9;
+    --accent-primary-to: #4fb6e8;
+    --accent-primary-flat: #1e88c7;
+    --nav-dark-from: #2b2b2b;
+    --nav-dark-to: #565656;
+    --nav-dark-active: #1a1a1a;
+    --sidebar-bg: #f0f0f0;
+    --sidebar-active-bg: #e4e4e4;
+    --row-alt-bg: #eaf4fc;
+    --row-bg: #ffffff;
+    --border: #dddddd;
+    --text-heading: #333333;
+    --text-body: #555555;
+    --bg-page: #f5f5f5;
+
+    /* Bảng màu trạng thái máy in (map D-013, UI-Style-Guide.md mục 1) */
+    --status-printing: var(--accent-primary-flat);
+    --status-idle: #3fa55e;
+    --status-paused: #e0a52e;
+    --status-finished: #3fa55e;
+    --status-stopped: #8a8a8a;
+    --status-error: #d9534f;
+    --status-offline: #5a5a5a;
+    --status-unknown: #aaaaaa;
+
+    /* Typography (UI-Style-Guide.md mục 4) */
+    --font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-size-heading: 20px;
+    --font-size-label: 14px;
+    --font-size-body: 14px;
+    --font-size-caption: 13px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-family);
+    font-size: var(--font-size-body);
+    color: var(--text-body);
+    background-color: var(--bg-page);
+}
+
+/* Top bar (UI-Style-Guide.md mục 2) */
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    padding: 0 20px;
+    background-color: #ffffff;
+    border-bottom: 1px solid var(--border);
+}
+
+.top-bar__brand {
+    font-weight: 700;
+    font-size: var(--font-size-heading);
+    color: var(--text-heading);
+}
+
+.top-bar__clock {
+    font-size: var(--font-size-caption);
+    color: var(--text-body);
+}
+
+.top-bar__account a {
+    color: var(--accent-primary-flat);
+    text-decoration: none;
+    font-size: var(--font-size-body);
+}
+
+/* Nav ngang chính (UI-Style-Guide.md mục 2) */
+.main-nav {
+    display: flex;
+    background: linear-gradient(to right, var(--nav-dark-from), var(--nav-dark-to));
+    padding: 0 20px;
+}
+
+.main-nav__item {
+    display: inline-block;
+    padding: 12px 18px;
+    color: #ffffff;
+    text-decoration: none;
+    font-size: var(--font-size-label);
+    font-weight: 700;
+}
+
+.main-nav__item--active {
+    background-color: var(--nav-dark-active);
+}
+
+/* Content chính (UI-Style-Guide.md mục 2) */
+.content {
+    padding: 24px 20px;
+}
+
+.content__heading {
+    font-size: var(--font-size-heading);
+    font-weight: 700;
+    color: var(--text-heading);
+    margin: 0 0 8px 0;
+}
+
+.content__placeholder {
+    font-size: var(--font-size-caption);
+    color: var(--text-body);
+}

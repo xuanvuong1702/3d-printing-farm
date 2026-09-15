@@ -3,6 +3,18 @@ uvicorn[standard]>=0.30,<1.0
 httpx>=0.27,<1.0
 python-multipart>=0.0.9,<1.0
 
+# Tầng render server-side (E6-1/C1, D-009). Ghi chú: Jinja2 KHÔNG phải
+# dependency có sẵn của fastapi/starlette (đã kiểm chứng thực tế khi
+# chạy chunk này) - fastapi.templating.Jinja2Templates cần package
+# `jinja2` được cài riêng, nên ghim tường minh ở đây để `pip install -r
+# requirements.txt` trên máy triển khai thật (Pi) không thiếu, cùng
+# tinh thần ghim tường minh đã áp dụng cho aiohttp/async-timeout ở
+# dưới. HTMX/Alpine.js (cũng theo D-009) KHÔNG xuất hiện ở đây - đó là
+# 2 file JS thuần được VENDOR trực tiếp vào app/static/js/vendor/
+# (không phải gói pip, không qua bước build nào), xem docstring
+# app/templates/base.html.
+jinja2>=3.1,<4.0
+
 # Kênh WebSocket real-time (E2-1, D-002 phần 2 / Q-001) - KHÁC hẳn httpx
 # thuần ở trên (D-002 phần 1, dùng cho lệnh HTTP rời rạc). aiohttp/
 # async-timeout là ràng buộc transitive của chính moonraker-api

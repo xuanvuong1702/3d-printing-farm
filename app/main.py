@@ -1,8 +1,11 @@
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from app.dispatch.scheduler import start_dispatch_scheduler, stop_dispatch_scheduler
 from app.heartbeat.scheduler import start_heartbeat_scheduler, stop_heartbeat_scheduler
@@ -39,7 +42,15 @@ app.include_router(realtime_router)
 app.include_router(reports_router)
 app.include_router(spools_router)
 
+_BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
+app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+
 @app.get("/")
 def read_root() -> dict:
     return {"status": "ok"}
+
+@app.get("/dashboard")
+def dashboard(request: Request):
+    return templates.TemplateResponse(request, "base.html", {"page_title": "Dashboard"})
 

@@ -1,0 +1,71 @@
+<!--
+    Layout khung cho toàn bộ Epic 6 (E6-1/C1, đã rebuild sau khi phát
+    hiện thiếu D-009 — xem docs/State_E6-1_v3.md mục "Nhật ký chunk đã
+    chạy") — top bar + nav ngang, KHÔNG có sidebar (đúng
+    docs/UI-Style-Guide.md mục 2: E6-1 là 1 trang grid duy nhất, chưa
+    cần sub-view). Mọi trang Epic 6 sau này kế thừa file này qua tag
+    "extends" của Jinja2 rồi chỉ ghi đè block "content"; không lặp lại
+    top bar/nav ở template con.
+
+    D-009 (Accepted, Decisions.md): "server-rendered (Jinja2) kết hợp
+    HTMX/Alpine.js cho cập nhật realtime qua WebSocket/SSE". Cả 2 thư
+    viện được VENDOR (KHÔNG dùng CDN — khớp D-004 "không public ra
+    Internet"/LAN nội bộ có thể không có Internet ra ngoài cho trình
+    duyệt client, và tinh thần tối giản/không phụ thuộc mạng ngoài đã
+    nêu ở docs/UI-Style-Guide.md mục 4) tại
+    app/static/js/vendor/htmx.min.js (htmx.org 2.0.10) và
+    app/static/js/vendor/alpine.min.js (alpinejs 3.17.3), tải ở MỌI
+    trang kế thừa base.html qua layout này (không lặp lại ở template
+    con). Phân công vai trò (chốt tại C0 rebuild, xem
+    "Quyết định MỚI phát sinh" #1 trong state):
+      - Alpine.js: chủ đạo cho cập nhật realtime — endpoint SSE có sẵn
+        `GET /printers/realtime/stream` (E2-2/C3, đã khoá) đẩy JSON
+        thô (mảng PrinterRealtimeResponse), KHÔNG phải HTML fragment,
+        nên không hợp với cơ chế swap HTML của htmx-ext-sse; Alpine
+        (`x-data`/`x-init` mở `EventSource` thủ công, parse JSON, bind
+        `x-text`/`x-bind` reactive) phù hợp hơn — sẽ code cụ thể ở C2.
+      - HTMX: dành cho các thao tác dạng hypermedia (form/action post
+        không cần reload trang) mà E6-1 chưa cần (dashboard C1/C2 hiện
+        tại thuần đọc dữ liệu) — dự kiến dùng ở E6-2/E6-3 (nút
+        start/pause/cancel/operator-confirm) hoặc nút refresh thủ công
+        dự phòng ở C3 của chính E6-1. Attribute `hx-*` chưa xuất hiện ở
+        C1 vì chưa có action nào cần — script vẫn tải sẵn để mọi trang
+        Epic 6 dùng chung 1 layout nhất quán, không phải tải riêng lẻ
+        từng trang.
+
+    Block "content" có nội dung placeholder mặc định để route smoke-test
+    /dashboard (C1) render ra HTML hợp lệ ngay cả khi chưa có template
+    con nào ghi đè — C2 sẽ tạo `dashboard.html` kế thừa file này và ghi
+    đè block "content" bằng grid card máy in thật.
+-->
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{% block title %}{{ page_title | default("QIDI Print Farm") }}{% endblock %} — QIDI Print Farm</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}" />
+    <script src="{{ url_for('static', path='/js/vendor/htmx.min.js') }}"></script>
+    <script src="{{ url_for('static', path='/js/vendor/alpine.min.js') }}" defer></script>
+</head>
+<body>
+    <header class="top-bar">
+        <div class="top-bar__brand">QIDI Print Farm</div>
+        <div class="top-bar__clock" id="system-clock" aria-label="Đồng hồ hệ thống"></div>
+        <div class="top-bar__account">
+            <a href="#">Đăng xuất</a>
+        </div>
+    </header>
+
+    <nav class="main-nav">
+        <a href="/dashboard" class="main-nav__item main-nav__item--active">Dashboard</a>
+    </nav>
+
+    <main class="content">
+        <h1 class="content__heading">{% block content_heading %}{{ page_title | default("Dashboard") }}{% endblock %}</h1>
+        {% block content %}
+        <p class="content__placeholder">Nội dung sẽ được bổ sung.</p>
+        {% endblock %}
+    </main>
+</body>
+</html>
