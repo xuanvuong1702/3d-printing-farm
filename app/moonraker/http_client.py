@@ -351,3 +351,17 @@ def get_spoolman_spool(
     )
     return resp.json()
 
+def get_webcams(
+    host: str,
+    port: int = DEFAULT_MOONRAKER_PORT,
+    api_key: Optional[str] = None,
+) -> list[dict]:
+    resp = _request(
+        "GET",
+        host,
+        "/server/webcams/list",
+        port=port,
+        api_key=api_key,
+    )
+    return resp.json().get("webcams", [])
+

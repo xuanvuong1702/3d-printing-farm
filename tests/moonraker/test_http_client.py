@@ -450,6 +450,67 @@ def test_get_spoolman_spool_returns_error_envelope_without_raising():
     }
 
 @respx.mock
+def test_get_webcams_returns_webcams_array_unwrapped():
+    route = respx.get(f"{BASE_URL}/server/webcams/list").respond(
+        200,
+        json={
+            "webcams": [
+                {
+                    "name": "testcam",
+                    "location": "printer",
+                    "service": "mjpegstreamer",
+                    "enabled": True,
+                    "stream_url": "/webcam/?action=stream",
+                    "snapshot_url": "/webcam/?action=snapshot",
+                    "source": "config",
+                    "uid": "55d3801e-fdc1-438d-8728-2fff8b83b909",
+                }
+            ]
+        },
+    )
+
+    result = hc.get_webcams(HOST, port=PORT)
+
+    assert route.called
+
+    assert result == [
+        {
+            "name": "testcam",
+            "location": "printer",
+            "service": "mjpegstreamer",
+            "enabled": True,
+            "stream_url": "/webcam/?action=stream",
+            "snapshot_url": "/webcam/?action=snapshot",
+            "source": "config",
+            "uid": "55d3801e-fdc1-438d-8728-2fff8b83b909",
+        }
+    ]
+
+@respx.mock
+def test_get_webcams_returns_empty_list_when_none_configured():
+    respx.get(f"{BASE_URL}/server/webcams/list").respond(200, json={"webcams": []})
+
+    result = hc.get_webcams(HOST, port=PORT)
+
+    assert result == []
+
+@respx.mock
+def test_get_webcams_raises_on_http_error_status():
+    respx.get(f"{BASE_URL}/server/webcams/list").respond(500, text="internal error")
+
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.get_webcams(HOST, port=PORT)
+
+@respx.mock
+def test_get_webcams_raises_on_network_error():
+    respx.get(f"{BASE_URL}/server/webcams/list").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    with pytest.raises(hc.MoonrakerClientError):
+        hc.get_webcams(HOST, port=PORT)
+
+@respx.mock
 def test_request_sends_api_key_header_when_provided():
     route = respx.get(f"{BASE_URL}/server/info").respond(
         200, json={"result": {"klippy_connected": True}}
