@@ -159,11 +159,18 @@ body {
     color: var(--text-body);
 }
 
+/* E6-2/C1: card giờ là 1 thẻ <a> trỏ sang trang chi tiết máy
+   (AC gốc E6-2 "click vào 1 máy") - reset style link mặc định
+   (display: block để chiếm trọn ô grid như <div> trước đây,
+   text-decoration/color kế thừa để không đổi giao diện đã khoá). */
 .printer-card {
+    display: block;
     border: 1px solid var(--border);
     border-radius: 6px;
     background-color: #ffffff;
     padding: 16px;
+    text-decoration: none;
+    color: inherit;
 }
 
 /* Trạng thái mờ khi realtime_connected=False (UI-Style-Guide.md mục 1:
@@ -259,6 +266,19 @@ body {
     background-color: var(--status-unknown);
 }
 
+/* Badge cho job_history.status (E6-2/C1, D-013 - 3 giá trị canonical
+   `finished/failed/cancelled`, KHÁC tập canonical printers.status ở
+   trên). `finished` tái dùng .badge--finished đã có; 2 class MỚI dưới
+   đây tái dùng biến màu đã có (--status-error/--status-stopped),
+   KHÔNG thêm hex mới. */
+.badge--failed {
+    background-color: var(--status-error);
+}
+
+.badge--cancelled {
+    background-color: var(--status-stopped);
+}
+
 /* Thanh tiến độ ngang (UI-Style-Guide.md mục 3, màu --accent-primary) */
 .printer-card__progress {
     display: flex;
@@ -345,5 +365,133 @@ body {
 
     .content {
         padding: 16px 12px;
+    }
+}
+
+/* Trang chi tiết 1 máy in (E6-2/C1, UI-Style-Guide.md mục 2 - sidebar
+   trái) + bảng key-value (mục 3). */
+.detail-page {
+    display: flex;
+    gap: 20px;
+}
+
+.sidebar {
+    flex: 0 0 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background-color: var(--sidebar-bg);
+    border-radius: 6px;
+    padding: 8px;
+}
+
+.sidebar__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    font-size: var(--font-size-label);
+    font-weight: 700;
+    color: var(--text-heading);
+    cursor: pointer;
+}
+
+.sidebar__item--active {
+    background-color: var(--sidebar-active-bg);
+    color: var(--accent-primary-flat);
+}
+
+.detail-content {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Bảng key-value xen kẽ màu (UI-Style-Guide.md mục 3) - dùng chung cho
+   tab Overview (key-value thật) và tab Log (bảng lịch sử job, hàng vẫn
+   xen kẽ màu theo cùng component). */
+.kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--border);
+}
+
+.kv-table th,
+.kv-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: var(--font-size-body);
+    color: var(--text-body);
+}
+
+.kv-table th {
+    font-weight: 700;
+    color: var(--text-heading);
+}
+
+.kv-table__label {
+    width: 220px;
+    font-weight: 700;
+    color: var(--text-heading);
+}
+
+.kv-table tbody tr:nth-child(odd) {
+    background-color: var(--row-bg);
+}
+
+.kv-table tbody tr:nth-child(even) {
+    background-color: var(--row-alt-bg);
+}
+
+.detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.detail-actions__start-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Nút hành động (UI-Style-Guide.md mục 3, cùng công thức gradient
+   .btn-refresh đã có ở E6-1/C3) - class riêng .btn-action cho các nút
+   điều khiển máy in ở trang chi tiết (E6-2/C1), KHÔNG sửa/dùng lại
+   .btn-refresh đã khoá (nút đó gắn riêng với reconnectSSE() của
+   dashboard, ngữ nghĩa khác). */
+.btn-action {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: linear-gradient(to bottom, var(--accent-primary), var(--accent-primary-to));
+    color: #ffffff;
+    font-weight: 700;
+    font-size: var(--font-size-body);
+    cursor: pointer;
+}
+
+.btn-action:hover {
+    filter: brightness(0.95);
+}
+
+.btn-action--danger {
+    background: var(--status-error);
+}
+
+@media (max-width: 639px) {
+    .detail-page {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        flex: none;
+        flex-direction: row;
+        overflow-x: auto;
     }
 }

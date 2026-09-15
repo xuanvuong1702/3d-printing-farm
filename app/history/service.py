@@ -58,6 +58,15 @@ _SELECT_LATEST_HISTORY_CREATED_AT_SQL = """
 SELECT MAX(created_at) FROM job_history WHERE printer_id = ?
 """
 
+_SELECT_JOB_HISTORY_FOR_PRINTER_SQL = """
+SELECT id, job_id, filename, status, start_time, end_time,
+       spool_id, created_at
+FROM job_history
+WHERE printer_id = ?
+ORDER BY created_at DESC
+LIMIT ?
+"""
+
 def map_native_history_status(native: str) -> Optional[str]:
     if native == _NATIVE_STATUS_IN_PROGRESS:
         return None
@@ -164,6 +173,33 @@ def sync_job_history_entry(
     )
     conn.execute(_UPDATE_JOB_STATUS_SQL, (canonical_status, job_id))
     conn.commit()
+
+def get_job_history_for_printer(
+    printer_id: int,
+    db_path: str = DEFAULT_DB_PATH,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    connection = sqlite3.connect(db_path)
+    try:
+        rows = connection.execute(
+            _SELECT_JOB_HISTORY_FOR_PRINTER_SQL, (printer_id, limit)
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return [
+        {
+            "id": row[0],
+            "job_id": row[1],
+            "filename": row[2],
+            "status": row[3],
+            "start_time": row[4],
+            "end_time": row[5],
+            "spool_id": row[6],
+            "created_at": row[7],
+        }
+        for row in rows
+    ]
 
 def run_history_sync_cycle(db_path: str = DEFAULT_DB_PATH) -> None:
     connection = sqlite3.connect(db_path)

@@ -1,0 +1,194 @@
+<!--
+    Trang chi tiết 1 máy in (E6-2/C1) — kế thừa `base.html` (top
+    bar/nav đã có, D-009), ghi đè block "content". Sidebar trái
+    Overview/Log (`docs/UI-Style-Guide.md` mục 2 — sidebar chỉ dùng
+    cho trang có nhiều sub-view thật sự, đúng dự trù của mục 2 cho
+    E6-2). Tab switching là state thuần phía client (không cần round-
+    trip server) — dùng Alpine.js (`x-data="{ tab: 'overview' }"`),
+    đúng phân công vai trò đã chốt ở E6-1 Decision Table #1
+    (Alpine cho state reactive phía client).
+
+    Tab "Overview": bảng key-value xen kẽ màu (`docs/UI-Style-Guide.md`
+    mục 3) hiển thị `printer` (`PrinterRealtimeResponse`, CÙNG dữ liệu
+    `/dashboard` dùng cho card — không có nguồn dữ liệu thứ 2). Các nút
+    điều khiển bên dưới bảng dùng `hx-post` gọi THẲNG route JSON đã có
+    ở `app/printers/router.py` (KHÔNG viết lại logic nghiệp vụ, đúng
+    D-009 vai trò HTMX cho hành động hypermedia — Decision Table E6-1
+    #1). Các route này trả `PrinterResponse`/JSON thuần (không phải
+    HTML fragment) nên dùng `hx-swap="none"` (không cố swap JSON vào
+    DOM) + `hx-on::after-request` reload lại trang khi request thành
+    công, để Overview/Log hiển thị đúng trạng thái mới nhất — quyết
+    định cục bộ, không phải build thêm 1 tầng HTML-fragment endpoint
+    riêng cho chunk này (ghi ở "Quyết định MỚI phát sinh",
+    `docs/State_E6-2_v3.md`).
+
+    Tab "Log": bảng `history` (`get_job_history_for_printer`, MỚI ở
+    C1) — 3 giá trị canonical `finished/failed/cancelled` (D-013,
+    job_history.status), badge màu tái dùng `--status-finished`
+    (`badge--finished` đã có) + 2 class MỚI `badge--failed`/
+    `badge--cancelled` (tái dùng biến `--status-error`/`--status-
+    stopped` đã có, KHÔNG thêm hex mới — xem `app/static/css/style.css`).
+-->
+{% extends "base.html" %}
+
+{% block content_heading %}{{ printer.name }}{% endblock %}
+
+{% block content %}
+<div class="detail-page" x-data="{ tab: 'overview' }">
+    <aside class="sidebar">
+        <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'sidebar__item--active': tab === 'overview' }"
+            @click="tab = 'overview'"
+        >Overview</button>
+        <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'sidebar__item--active': tab === 'log' }"
+            @click="tab = 'log'"
+        >Log</button>
+    </aside>
+
+    <div class="detail-content">
+        <div x-show="tab === 'overview'">
+            <table class="kv-table">
+                <tbody>
+                    <tr>
+                        <td class="kv-table__label">Trạng thái</td>
+                        <td class="kv-table__value">
+                            <span class="badge badge--{{ printer.canonical_status | lower }}">{{ printer.canonical_status }}</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Kết nối realtime</td>
+                        <td class="kv-table__value">{{ "Có" if printer.realtime_connected else "Không (dữ liệu cũ)" }}</td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Nhiệt độ đầu phun</td>
+                        <td class="kv-table__value">
+                            {% if printer.extruder_temp is not none %}{{ printer.extruder_temp | round | int }}°C{% if printer.extruder_target is not none %} / mục tiêu {{ printer.extruder_target | round | int }}°C{% endif %}{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Nhiệt độ bàn</td>
+                        <td class="kv-table__value">
+                            {% if printer.bed_temp is not none %}{{ printer.bed_temp | round | int }}°C{% if printer.bed_target is not none %} / mục tiêu {{ printer.bed_target | round | int }}°C{% endif %}{% else %}—{% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Tiến độ</td>
+                        <td class="kv-table__value">{% if printer.progress_percent is not none %}{{ printer.progress_percent }}%{% else %}—{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Thời gian còn lại</td>
+                        <td class="kv-table__value">{% if printer.time_remaining_seconds is not none %}{{ printer.time_remaining_seconds }} giây{% else %}—{% endif %}</td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">File đang in</td>
+                        <td class="kv-table__value">{{ printer.filename or "—" }}</td>
+                    </tr>
+                    <tr>
+                        <td class="kv-table__label">Cập nhật lúc</td>
+                        <td class="kv-table__value">{{ printer.updated_at or "—" }}</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="detail-actions">
+                <form
+                    class="detail-actions__start-form"
+                    hx-post="/printers/{{ printer.id }}/print/start"
+                    hx-encoding="multipart/form-data"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >
+                    <input type="file" name="file" required />
+                    <button type="submit" class="btn-action">Start</button>
+                </form>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/print/pause"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Pause</button>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/print/resume"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Resume</button>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/print/cancel"
+                    hx-confirm="Huỷ job đang in trên máy này?"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Cancel</button>
+                <button
+                    type="button"
+                    class="btn-action btn-action--danger"
+                    hx-post="/printers/{{ printer.id }}/emergency_stop"
+                    hx-vals='{"confirm": true}'
+                    hx-confirm="Gửi lệnh Emergency Stop tới máy này?"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >E-Stop</button>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/confirm"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Confirm</button>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/power/on"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Power On</button>
+                <button
+                    type="button"
+                    class="btn-action"
+                    hx-post="/printers/{{ printer.id }}/power/off"
+                    hx-swap="none"
+                    hx-on::after-request="if (event.detail.successful) window.location.reload()"
+                >Power Off</button>
+            </div>
+        </div>
+
+        <div x-show="tab === 'log'" style="display: none;">
+            <table class="kv-table">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Trạng thái</th>
+                        <th>Bắt đầu</th>
+                        <th>Kết thúc</th>
+                        <th>Ghi nhận lúc</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in history %}
+                    <tr>
+                        <td>{{ entry.filename }}</td>
+                        <td><span class="badge badge--{{ entry.status }}">{{ entry.status }}</span></td>
+                        <td>{{ entry.start_time or "—" }}</td>
+                        <td>{{ entry.end_time or "—" }}</td>
+                        <td>{{ entry.created_at }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5">Chưa có lịch sử job nào cho máy này.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -72,9 +72,10 @@
 
     <div class="dashboard-grid">
     <template x-for="printer in printers" :key="printer.id">
-        <div
+        <a
             class="printer-card"
             :class="{ 'printer-card--stale': !printer.realtime_connected }"
+            :href="'/printers/' + printer.id + '/detail'"
         >
             <div class="printer-card__header">
                 <span class="printer-card__name" x-text="printer.name"></span>
@@ -109,7 +110,7 @@
                 x-show="printer.filename"
                 x-text="truncateFilename(printer.filename)"
             ></div>
-        </div>
+        </a>
     </template>
 
     <!-- Fallback không-JS / trước khi Alpine chạy: Jinja render sẵn
@@ -119,7 +120,7 @@
          nguồn `printers_json`), nên không bị hiển thị trùng lặp. -->
     <noscript>
         {% for printer in printers %}
-        <div class="printer-card{% if not printer.realtime_connected %} printer-card--stale{% endif %}">
+        <a href="/printers/{{ printer.id }}/detail" class="printer-card{% if not printer.realtime_connected %} printer-card--stale{% endif %}">
             <div class="printer-card__header">
                 <span class="printer-card__name">{{ printer.name }}</span>
                 <span class="printer-card__badge-group">
@@ -145,7 +146,7 @@
             {% if printer.filename %}
             <div class="printer-card__filename">{{ printer.filename }}</div>
             {% endif %}
-        </div>
+        </a>
         {% else %}
         <p class="dashboard-grid__empty">Chưa có máy in nào được đăng ký.</p>
         {% endfor %}
