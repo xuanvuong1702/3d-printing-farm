@@ -18,6 +18,9 @@
  * style guide mục 1), thu gọn top bar ở <640px, và
  * `.connection-banner`/`.btn-refresh` (component "Nút hành động", style
  * guide mục 3) cho fallback khi SSE mất kết nối.
+ * Phạm vi E6-4/C3: `overflow-wrap` cho `.kv-table__value` (tràn ngang
+ * filename dài ở tab Overview) + touch-target 44px cho `.btn-refresh`
+ * ở <640px (cùng pattern C2).
  */
 
 :root {
@@ -366,6 +369,19 @@ body {
     .content {
         padding: 16px 12px;
     }
+
+    /* E6-4/C3: touch-target khuyến nghị ~44px cho nút "Làm mới" trong
+       .connection-banner (dashboard) - hiện chưa đạt (padding: 8px
+       16px + line-height mặc định của font-size-body 14px ước tính
+       ~34px). Cùng pattern min-height + flex đã dùng cho
+       .sidebar__item/.btn-action ở C2 (chỉ mobile, giữ nguyên padding/
+       gradient/font desktop). */
+    .btn-refresh {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
 }
 
 /* Trang chi tiết 1 máy in (E6-2/C1, UI-Style-Guide.md mục 2 - sidebar
@@ -436,6 +452,17 @@ body {
     width: 220px;
     font-weight: 700;
     color: var(--text-heading);
+}
+
+/* E6-4/C3: giá trị dạng text dài không có khoảng trắng (vd.
+   `printer.filename` ở tab Overview — KHÔNG nằm trong `.table-scroll`
+   như bảng Log ở C1) có thể tràn ngang khỏi ô `width: 220px` cố định
+   của `.kv-table__label` ở màn hẹp, vì trình duyệt không tự ngắt dòng
+   một token không có dấu cách/gạch nối. `overflow-wrap: break-word`
+   chỉ ngắt khi thật sự cần (ưu tiên ngắt ở khoảng trắng như bình
+   thường trước), không đổi hiển thị của giá trị ngắn hiện có. */
+.kv-table__value {
+    overflow-wrap: break-word;
 }
 
 .kv-table tbody tr:nth-child(odd) {
