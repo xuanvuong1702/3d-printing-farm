@@ -495,3 +495,19 @@ body {
         overflow-x: auto;
     }
 }
+
+/* Tab "Camera" (E6-3/C3) - khung ảnh cho MJPEG stream, viền đồng bộ
+   --border đã có (không thêm biến CSS mới). */
+.camera-frame {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    display: inline-block;
+    max-width: 100%;
+}
+
+.camera-frame__img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}

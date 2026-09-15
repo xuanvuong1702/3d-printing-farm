@@ -28,6 +28,15 @@
     (`badge--finished` đã có) + 2 class MỚI `badge--failed`/
     `badge--cancelled` (tái dùng biến `--status-error`/`--status-
     stopped` đã có, KHÔNG thêm hex mới — xem `app/static/css/style.css`).
+
+    Tab "Camera" (E6-3/C3): dùng `webcam_stream_url` (context, truyền
+    từ `app/main.py::printer_detail` qua `resolve_webcam_stream_url`,
+    E6-3/C2) — nếu khác `None`, render `<img>` trỏ thẳng tới URL
+    MJPEG stream của Moonraker (trình duyệt tự render multipart MJPEG
+    qua thẻ `<img>` thường, không cần JS thêm, đúng AC "không xử lý
+    thêm ở backend" + D-004 không proxy qua service); nếu `None` →
+    fallback text. Cùng cơ chế Alpine `x-show`/`tab` như Overview/Log
+    (D-009), không có hành động `hx-post` nào cho tab này.
 -->
 {% extends "base.html" %}
 
@@ -48,6 +57,12 @@
             :class="{ 'sidebar__item--active': tab === 'log' }"
             @click="tab = 'log'"
         >Log</button>
+        <button
+            type="button"
+            class="sidebar__item"
+            :class="{ 'sidebar__item--active': tab === 'camera' }"
+            @click="tab = 'camera'"
+        >Camera</button>
     </aside>
 
     <div class="detail-content">
@@ -188,6 +203,16 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+
+        <div x-show="tab === 'camera'" style="display: none;">
+            {% if webcam_stream_url %}
+            <div class="camera-frame">
+                <img src="{{ webcam_stream_url }}" alt="Webcam {{ printer.name }}" class="camera-frame__img" />
+            </div>
+            {% else %}
+            <p>Máy này chưa cấu hình camera.</p>
+            {% endif %}
         </div>
     </div>
 </div>
