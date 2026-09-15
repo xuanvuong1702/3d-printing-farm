@@ -13,6 +13,7 @@ from app.db.migrate import run_migrations
 from app.history.service import (
     get_job_history_for_printer as _real_get_job_history_for_printer,
 )
+from app.printers.service import get_printer as _real_get_printer
 from app.realtime.schemas import PrinterRealtimeResponse
 from app.realtime.service import get_printer_realtime as _real_get_printer_realtime
 from app.realtime.service import list_printers_realtime as _real_list_printers_realtime
@@ -46,6 +47,13 @@ def client(printer_detail_db_path: str, monkeypatch) -> Iterator[TestClient]:
             store, db_path=printer_detail_db_path
         )
 
+    def _get_printer_with_tmp_db(printer_id: int):
+        return _real_get_printer(printer_id, db_path=printer_detail_db_path)
+
+    def _get_webcams_no_camera(host: str, port: int = 7125, api_key=None):
+
+        return []
+
     monkeypatch.setattr(
         main_module, "get_printer_realtime", _get_printer_realtime_with_tmp_db
     )
@@ -57,6 +65,8 @@ def client(printer_detail_db_path: str, monkeypatch) -> Iterator[TestClient]:
     monkeypatch.setattr(
         main_module, "list_printers_realtime", _list_printers_realtime_with_tmp_db
     )
+    monkeypatch.setattr(main_module, "get_printer", _get_printer_with_tmp_db)
+    monkeypatch.setattr(main_module, "get_webcams", _get_webcams_no_camera)
 
     with TestClient(main_module.app) as test_client:
         yield test_client
@@ -93,7 +103,8 @@ def set_realtime_state(client: TestClient) -> Callable[..., None]:
     return _set
 
 _INSERT_PRINTER_SQL = (
-    "INSERT INTO printers (name, ip, moonraker_port, status) VALUES (?, ?, ?, ?)"
+    "INSERT INTO printers (name, ip, moonraker_port, status, capabilities) "
+    "VALUES (?, ?, ?, ?, ?)"
 )
 
 @pytest.fixture()
@@ -113,7 +124,8 @@ def insert_printer(printer_detail_db_path: str) -> Callable[..., int]:
         connection = sqlite3.connect(printer_detail_db_path)
         try:
             cursor = connection.execute(
-                _INSERT_PRINTER_SQL, (name, effective_ip, moonraker_port, status)
+                _INSERT_PRINTER_SQL,
+                (name, effective_ip, moonraker_port, status, "[]"),
             )
             connection.commit()
             return cursor.lastrowid

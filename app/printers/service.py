@@ -525,6 +525,33 @@ def confirm_printer(
 
     return _row_to_response(updated_row)
 
+def get_printer(
+    printer_id: int, db_path: str = DEFAULT_DB_PATH
+) -> Optional[PrinterResponse]:
+    connection = sqlite3.connect(db_path)
+    try:
+        row = connection.execute(_SELECT_PRINTER_BY_ID_SQL, (printer_id,)).fetchone()
+    finally:
+        connection.close()
+
+    if row is None:
+        return None
+    return _row_to_response(row)
+
+def resolve_webcam_stream_url(
+    printer: PrinterResponse, webcams: list[dict]
+) -> Optional[str]:
+    enabled_webcam = next(
+        (webcam for webcam in webcams if webcam.get("enabled")), None
+    )
+    if enabled_webcam is None:
+        return None
+
+    stream_url = enabled_webcam.get("stream_url", "")
+    if stream_url.startswith("http://") or stream_url.startswith("https://"):
+        return stream_url
+    return f"http://{printer.ip}{stream_url}"
+
 _SELECT_QUEUED_JOBS_BY_PRINTER_SQL = """
 SELECT id, filename FROM jobs WHERE printer_id = ? AND status = 'queued'
 """
