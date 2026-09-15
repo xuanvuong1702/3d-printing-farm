@@ -1,0 +1,126 @@
+<!--
+    Trang dashboard tổng quan (E6-1/C2) — kế thừa `base.html` (top
+    bar/nav đã có, D-009), chỉ ghi đè block "content" + "extra_scripts"
+    theo đúng quy ước đã ghi ở `CLAUDE.md` mục "Quy ước code / Template
+    Epic 6".
+
+    Grid card máy in theo `docs/UI-Style-Guide.md` mục 3: khối bo góc
+    nhẹ/viền `--border`/nền trắng, tên máy đậm, badge trạng thái màu
+    theo mục 1 (map `canonical_status` -> class `badge--{status thường}`,
+    khớp biến `--status-*` đã có ở `app/static/css/style.css`), nhiệt
+    độ đầu phun/bàn dạng "205°C / 210°C", thanh tiến độ ngang nếu
+    `progress_percent` khác `None`, `filename` rút gọn nếu quá dài.
+    CHƯA có breakpoint responsive đầy đủ hay xử lý mờ card khi
+    `realtime_connected=False` (để dành C3, `docs/UI-Style-Guide.md`
+    mục 5) — CSS hiện tại chỉ có 1 layout grid tự co giãn cơ bản
+    (`auto-fill`/`minmax`), không phải bộ 3 breakpoint đầy đủ của style
+    guide.
+
+    Dữ liệu: `printers` (danh sách `PrinterRealtimeResponse`, dùng để
+    Jinja render lần đầu qua vòng lặp "for" thường — vẫn hiển thị được
+    ngay cả khi JS bị tắt/lỗi) VÀ `printers_json` (chuỗi JSON CÙNG dữ
+    liệu đó, nhúng vào thuộc tính `data-printers` cho Alpine.js đọc lại
+    làm state phản ứng ban đầu — xem `app/static/js/dashboard.js`).
+    Jinja tự escape `printers_json` khi render vào thuộc tính HTML
+    (KHÔNG dùng filter "safe") vì đây là ngữ cảnh thuộc tính, không
+    phải JS thô — Alpine tự `JSON.parse` lại chuỗi đã unescape bởi
+    trình duyệt.
+
+    Sau khi Alpine.js khởi tạo (`x-init="init(...)"`), `printers` phía
+    JS (biến reactive `x-data`) THAY THẾ hoàn toàn vai trò hiển thị của
+    vòng lặp Jinja bên dưới — mỗi lần `EventSource` nhận dữ liệu mới
+    từ `/printers/realtime/stream` (JSON mảng thô, KHÔNG dùng
+    `htmx-ext-sse`, xem "Quyết định MỚI phát sinh" #1 ở
+    `docs/State_E6-1_v3.md`), toàn bộ mảng được gán lại
+    (`this.printers = data`) để Alpine cập nhật DOM qua `x-for`.
+-->
+{% extends "base.html" %}
+
+{% block content_heading %}Tổng quan máy in{% endblock %}
+
+{% block content %}
+<div
+    class="dashboard-grid"
+    data-printers="{{ printers_json }}"
+    x-data="printerDashboardData()"
+    x-init="init($el.dataset.printers)"
+>
+    <template x-for="printer in printers" :key="printer.id">
+        <div
+            class="printer-card"
+            :class="{ 'printer-card--stale': !printer.realtime_connected }"
+        >
+            <div class="printer-card__header">
+                <span class="printer-card__name" x-text="printer.name"></span>
+                <span
+                    class="badge"
+                    :class="'badge--' + printer.canonical_status.toLowerCase()"
+                    x-text="printer.canonical_status"
+                ></span>
+            </div>
+
+            <div class="printer-card__temps" x-text="formatTemps(printer)"></div>
+
+            <div class="printer-card__progress" x-show="printer.progress_percent !== null">
+                <div class="progress-bar">
+                    <div
+                        class="progress-bar__fill"
+                        :style="'width: ' + printer.progress_percent + '%'"
+                    ></div>
+                </div>
+                <span class="progress-bar__label" x-text="printer.progress_percent + '%'"></span>
+            </div>
+
+            <div
+                class="printer-card__filename"
+                x-show="printer.filename"
+                x-text="truncateFilename(printer.filename)"
+            ></div>
+        </div>
+    </template>
+
+    <!-- Fallback không-JS / trước khi Alpine chạy: Jinja render sẵn
+         cùng danh sách máy in (không có cập nhật realtime, chỉ hiển
+         thị trạng thái tại thời điểm render). Alpine `x-for` ở trên sẽ
+         thay thế nội dung này ngay khi khởi tạo xong (cùng 1 dữ liệu
+         nguồn `printers_json`), nên không bị hiển thị trùng lặp. -->
+    <noscript>
+        {% for printer in printers %}
+        <div class="printer-card">
+            <div class="printer-card__header">
+                <span class="printer-card__name">{{ printer.name }}</span>
+                <span class="badge badge--{{ printer.canonical_status | lower }}">{{ printer.canonical_status }}</span>
+            </div>
+            <div class="printer-card__temps">
+                {% if printer.extruder_temp is not none %}{{ printer.extruder_temp | round | int }}°C{% else %}—{% endif %}
+                /
+                {% if printer.bed_temp is not none %}{{ printer.bed_temp | round | int }}°C{% else %}—{% endif %}
+            </div>
+            {% if printer.progress_percent is not none %}
+            <div class="printer-card__progress">
+                <div class="progress-bar">
+                    <div class="progress-bar__fill" style="width: {{ printer.progress_percent }}%"></div>
+                </div>
+                <span class="progress-bar__label">{{ printer.progress_percent }}%</span>
+            </div>
+            {% endif %}
+            {% if printer.filename %}
+            <div class="printer-card__filename">{{ printer.filename }}</div>
+            {% endif %}
+        </div>
+        {% else %}
+        <p class="dashboard-grid__empty">Chưa có máy in nào được đăng ký.</p>
+        {% endfor %}
+    </noscript>
+
+    <p
+        class="dashboard-grid__empty"
+        x-show="printers.length === 0"
+        style="display: none;"
+    >Chưa có máy in nào được đăng ký.</p>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', path='/js/dashboard.js') }}" defer></script>
+{% endblock %}

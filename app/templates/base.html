@@ -35,8 +35,15 @@
 
     Block "content" có nội dung placeholder mặc định để route smoke-test
     /dashboard (C1) render ra HTML hợp lệ ngay cả khi chưa có template
-    con nào ghi đè — C2 sẽ tạo `dashboard.html` kế thừa file này và ghi
-    đè block "content" bằng grid card máy in thật.
+    con nào ghi đè — C2 đã tạo `app/templates/dashboard.html` kế thừa
+    file này, ghi đè block "content" bằng grid card máy in thật.
+
+    Block "extra_scripts" (MỚI, E6-1/C2) — rỗng mặc định, đặt ngay
+    trước </body> (sau 2 script vendor ở <head> đã tải theo thứ tự
+    document, nên chạy sau) để template con thêm script riêng của
+    trang đó (ví dụ `dashboard.html` dùng để tải
+    `app/static/js/dashboard.js`, nơi định nghĩa hàm `x-data` cho
+    Alpine.js của trang) mà không phải lặp lại toàn bộ layout.
 -->
 <!DOCTYPE html>
 <html lang="vi">
@@ -67,5 +74,7 @@
         <p class="content__placeholder">Nội dung sẽ được bổ sung.</p>
         {% endblock %}
     </main>
+
+    {% block extra_scripts %}{% endblock %}
 </body>
 </html>

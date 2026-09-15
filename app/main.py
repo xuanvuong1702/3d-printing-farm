@@ -1,4 +1,5 @@
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -14,6 +15,7 @@ from app.printers.router import router as printers_router
 from app.realtime.alerts import start_alert_watcher, stop_alert_watcher
 from app.realtime.pool import start_websocket_pool, stop_websocket_pool
 from app.realtime.router import router as realtime_router
+from app.realtime.service import list_printers_realtime
 from app.realtime.state import RealtimeStateStore
 from app.reports.router import router as reports_router
 from app.spools.router import router as spools_router
@@ -51,6 +53,16 @@ def read_root() -> dict:
     return {"status": "ok"}
 
 @app.get("/dashboard")
-def dashboard(request: Request):
-    return templates.TemplateResponse(request, "base.html", {"page_title": "Dashboard"})
+async def dashboard(request: Request):
+    printers = await list_printers_realtime(request.app.state.realtime_store)
+    printers_json = json.dumps([printer.model_dump() for printer in printers])
+    return templates.TemplateResponse(
+        request,
+        "dashboard.html",
+        {
+            "page_title": "Dashboard",
+            "printers": printers,
+            "printers_json": printers_json,
+        },
+    )
 
