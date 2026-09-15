@@ -494,6 +494,28 @@ body {
         flex-direction: row;
         overflow-x: auto;
     }
+
+    /* E6-4/C2: touch-target khuyến nghị ~44px - CHỈ override ở mobile,
+       không đổi padding desktop (10px 12px) để không phá layout đã
+       khoá ở màn rộng. min-height thay vì tăng padding để giữ nguyên
+       tỉ lệ chữ/khoảng trắng hiện có; flex-shrink: 0 giữ chiều rộng
+       tab khi .sidebar chuyển hàng ngang (overflow-x: auto ở trên). */
+    .sidebar__item {
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+    }
+
+    /* .btn-action vốn không phải flex container (chỉ padding: 8px
+       16px) - thêm display: flex để min-height không bị nội dung text
+       đẩy lệch; giữ nguyên padding/background/font desktop. */
+    .btn-action {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
 }
 
 /* E6-4/C1: bảng Log (5 cột, `.kv-table` trong `.table-scroll`) scroll
