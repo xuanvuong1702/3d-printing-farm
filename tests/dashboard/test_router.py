@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 def test_dashboard_renders_base_layout(client) -> None:
     response = client.get("/dashboard")
 
@@ -90,4 +92,76 @@ def test_dashboard_responsive_css_has_three_breakpoints(client) -> None:
     assert "@media (min-width: 640px)" in body
     assert "@media (min-width: 1024px)" in body
     assert "printer-card--stale" in body
+
+_CANONICAL_PRINTER_STATUSES = [
+    "IDLE",
+    "PRINTING",
+    "PAUSED",
+    "FINISHED",
+    "STOPPED",
+    "ERROR",
+    "OFFLINE",
+    "UNKNOWN",
+]
+
+@pytest.mark.parametrize("status", _CANONICAL_PRINTER_STATUSES)
+def test_dashboard_renders_correct_badge_class_for_each_canonical_status(
+    client, insert_printer, status: str
+) -> None:
+    insert_printer(name=f"May trang thai {status}", status=status)
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    body = response.text
+    assert f"May trang thai {status}" in body
+    assert f'class="badge badge--{status.lower()}">{status}' in body
+
+def test_dashboard_renders_multiple_printers_with_different_statuses_at_once(
+    client, insert_printer
+) -> None:
+    insert_printer(name="May A", status="PRINTING")
+    insert_printer(name="May B", status="ERROR")
+    insert_printer(name="May C", status="OFFLINE")
+
+    response = client.get("/dashboard")
+    body = response.text
+
+    assert response.status_code == 200
+    assert "May A" in body and "May B" in body and "May C" in body
+    assert 'class="badge badge--printing">PRINTING' in body
+    assert 'class="badge badge--error">ERROR' in body
+    assert 'class="badge badge--offline">OFFLINE' in body
+
+def test_dashboard_printer_with_realtime_data_is_not_marked_stale(
+    client, insert_printer, set_realtime_state
+) -> None:
+    printer_id = insert_printer(name="May Realtime OK", status="IDLE")
+    set_realtime_state(printer_id, canonical_status="PRINTING")
+
+    response = client.get("/dashboard")
+    body = response.text
+
+    assert response.status_code == 200
+    assert "May Realtime OK" in body
+
+    assert 'class="printer-card">' in body
+
+    name_index = body.index("May Realtime OK")
+    card_snippet = body[name_index : name_index + 400]
+    assert "printer-card__stale-icon" not in card_snippet
+
+def test_dashboard_mixed_stale_and_fresh_printers_get_distinct_classes(
+    client, insert_printer, set_realtime_state
+) -> None:
+    insert_printer(name="May Stale", status="IDLE")
+    fresh_id = insert_printer(name="May Fresh", status="IDLE")
+    set_realtime_state(fresh_id, canonical_status="PRINTING")
+
+    response = client.get("/dashboard")
+    body = response.text
+
+    assert response.status_code == 200
+    assert 'class="printer-card printer-card--stale">' in body
+    assert 'class="printer-card">' in body
 
