@@ -65,3 +65,29 @@ def test_dashboard_embeds_printers_json_for_alpine(client, insert_printer) -> No
     assert "data-printers=" in response.text
     assert "May In Test B" in response.text
 
+def test_dashboard_renders_stale_icon_and_class_when_no_realtime_data(client, insert_printer) -> None:
+    insert_printer(name="May In Test C", status="IDLE")
+
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "printer-card--stale" in response.text
+    assert "printer-card__stale-icon" in response.text
+
+def test_dashboard_has_connection_banner_and_refresh_button(client) -> None:
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert 'class="connection-banner"' in response.text
+    assert "reconnectSSE()" in response.text
+    assert "Làm mới" in response.text
+
+def test_dashboard_responsive_css_has_three_breakpoints(client) -> None:
+    response = client.get("/static/css/style.css")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "@media (min-width: 640px)" in body
+    assert "@media (min-width: 1024px)" in body
+    assert "printer-card--stale" in body
+

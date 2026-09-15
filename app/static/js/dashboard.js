@@ -1,7 +1,7 @@
 /*
- * Alpine.js component cho `/dashboard` (E6-1/C2) — xem docstring
- * `app/templates/dashboard.html` cho ngữ cảnh đầy đủ, không lặp lại ở
- * đây.
+ * Alpine.js component cho `/dashboard` (E6-1/C2, fallback SSE thêm ở
+ * C3) — xem docstring `app/templates/dashboard.html` cho ngữ cảnh đầy
+ * đủ, không lặp lại ở đây.
  *
  * Vai trò (Quyết định MỚI phát sinh #1, docs/State_E6-1_v3.md):
  * Alpine.js đảm nhiệm TOÀN BỘ state reactive/realtime của trang này —
@@ -14,12 +14,20 @@
  * `printerDashboardData()` là hàm factory global (Alpine gọi qua
  * `x-data="printerDashboardData()"`) — quy ước chuẩn của Alpine.js
  * cho component có logic phức tạp hơn 1 vài field đơn giản.
+ *
+ * C3 (MỚI): `sseConnected` theo dõi trạng thái CHÍNH `EventSource`
+ * (khác `printer.realtime_connected` per-printer từ backend, xem
+ * docstring `dashboard.html`). Logic mở kết nối được tách thành
+ * `connectSSE()` để `init()` và `reconnectSSE()` (nút refresh thủ
+ * công dự phòng, `docs/UI-Style-Guide.md` mục 5) dùng chung — không
+ * lặp lại code mở `EventSource` ở 2 nơi.
  */
 
 function printerDashboardData() {
     return {
         printers: [],
         eventSource: null,
+        sseConnected: true,
 
         /**
          * Khởi tạo state ban đầu từ `rawPrinters` (chuỗi JSON lấy từ
@@ -38,7 +46,26 @@ function printerDashboardData() {
                 this.printers = [];
             }
 
+            this.connectSSE();
+        },
+
+        /**
+         * Mở (hoặc mở lại) `EventSource` tới `/printers/realtime/
+         * stream`. Đóng kết nối cũ trước nếu có, để `reconnectSSE()`
+         * gọi lại hàm này không để rò rỉ 1 `EventSource` cũ vẫn còn
+         * mở song song.
+         */
+        connectSSE() {
+            if (this.eventSource) {
+                this.eventSource.close();
+            }
+
             this.eventSource = new EventSource("/printers/realtime/stream");
+
+            this.eventSource.onopen = () => {
+                this.sseConnected = true;
+            };
+
             this.eventSource.onmessage = (event) => {
                 try {
                     this.printers = JSON.parse(event.data);
@@ -46,16 +73,24 @@ function printerDashboardData() {
                     console.error("Không parse được dữ liệu realtime SSE:", error);
                 }
             };
-            // Lỗi kết nối (mất mạng, server restart...) chỉ log —
-            // trình duyệt tự động thử kết nối lại theo cơ chế retry
-            // mặc định của EventSource, không cần code thủ công ở C2.
-            // Xử lý hiển thị "mất kết nối" cho người dùng (ví dụ nút
-            // refresh thủ công dự phòng) để dành C3 (`docs/
-            // UI-Style-Guide.md` mục 5, chunk plan C3 ở
-            // `docs/State_E6-1_v3.md`).
+
+            // Lỗi kết nối (mất mạng, server restart, trình duyệt tự
+            // retry theo cơ chế mặc định của EventSource...) đánh dấu
+            // sseConnected=false để hiện banner + nút refresh thủ công
+            // (`.connection-banner`, `app/templates/dashboard.html`).
             this.eventSource.onerror = (error) => {
                 console.error("Kết nối SSE realtime gặp lỗi:", error);
+                this.sseConnected = false;
             };
+        },
+
+        /**
+         * Gọi khi người dùng bấm nút "Làm mới" trên banner mất kết
+         * nối — mở lại `EventSource` thủ công thay vì chờ cơ chế retry
+         * mặc định của trình duyệt.
+         */
+        reconnectSSE() {
+            this.connectSSE();
         },
 
         /**

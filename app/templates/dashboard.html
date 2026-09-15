@@ -1,8 +1,8 @@
 <!--
-    Trang dashboard tổng quan (E6-1/C2) — kế thừa `base.html` (top
-    bar/nav đã có, D-009), chỉ ghi đè block "content" + "extra_scripts"
-    theo đúng quy ước đã ghi ở `CLAUDE.md` mục "Quy ước code / Template
-    Epic 6".
+    Trang dashboard tổng quan (E6-1/C2, responsive + stale + fallback
+    SSE thêm ở C3) — kế thừa `base.html` (top bar/nav đã có, D-009),
+    chỉ ghi đè block "content" + "extra_scripts" theo đúng quy ước đã
+    ghi ở `CLAUDE.md` mục "Quy ước code / Template Epic 6".
 
     Grid card máy in theo `docs/UI-Style-Guide.md` mục 3: khối bo góc
     nhẹ/viền `--border`/nền trắng, tên máy đậm, badge trạng thái màu
@@ -10,11 +10,11 @@
     khớp biến `--status-*` đã có ở `app/static/css/style.css`), nhiệt
     độ đầu phun/bàn dạng "205°C / 210°C", thanh tiến độ ngang nếu
     `progress_percent` khác `None`, `filename` rút gọn nếu quá dài.
-    CHƯA có breakpoint responsive đầy đủ hay xử lý mờ card khi
-    `realtime_connected=False` (để dành C3, `docs/UI-Style-Guide.md`
-    mục 5) — CSS hiện tại chỉ có 1 layout grid tự co giãn cơ bản
-    (`auto-fill`/`minmax`), không phải bộ 3 breakpoint đầy đủ của style
-    guide.
+    Responsive (3 breakpoint, style guide mục 5) + style thật của
+    `.printer-card--stale`/`.printer-card__stale-icon` khi
+    `realtime_connected=False` đều là CSS thuần ở
+    `app/static/css/style.css` (C3) — template chỉ gắn class/hiển thị
+    icon, không có logic layout ở đây.
 
     Dữ liệu: `printers` (danh sách `PrinterRealtimeResponse`, dùng để
     Jinja render lần đầu qua vòng lặp "for" thường — vẫn hiển thị được
@@ -33,6 +33,18 @@
     `htmx-ext-sse`, xem "Quyết định MỚI phát sinh" #1 ở
     `docs/State_E6-1_v3.md`), toàn bộ mảng được gán lại
     (`this.printers = data`) để Alpine cập nhật DOM qua `x-for`.
+
+    C3 (MỚI) — fallback khi SSE mất kết nối: `sseConnected` (Alpine
+    state, `app/static/js/dashboard.js`) phản ánh trạng thái CHÍNH
+    `EventSource` của trình duyệt (khác `printer.realtime_connected`,
+    field per-printer từ backend cho biết `RealtimeStateStore` đã có dữ
+    liệu WS cho máy đó chưa). Khi `sseConnected=false`, hiện banner +
+    nút "Làm mới" gọi `reconnectSSE()` — dùng Alpine (không phải
+    `hx-get`) vì đây là điều khiển kết nối SSE phía client, cùng vai
+    trò Alpine đã đảm nhiệm cho toàn bộ realtime của trang (xem
+    "Quyết định MỚI phát sinh" #1 `docs/State_E6-1_v3.md`); `hx-get`
+    (HTMX) để dành cho hành động hypermedia gọi lại server, không phù
+    hợp cho việc mở lại 1 kết nối SSE thuần client-side.
 -->
 {% extends "base.html" %}
 
@@ -40,11 +52,25 @@
 
 {% block content %}
 <div
-    class="dashboard-grid"
+    class="dashboard"
     data-printers="{{ printers_json }}"
     x-data="printerDashboardData()"
     x-init="init($el.dataset.printers)"
 >
+    <!-- Fallback khi SSE mất kết nối (C3) — sseConnected phản ánh
+         trạng thái EventSource của trình duyệt, khác
+         printer.realtime_connected (per-printer, xem docstring đầu
+         file). Nút gọi reconnectSSE() (Alpine), không dùng hx-get. -->
+    <div
+        class="connection-banner"
+        x-show="!sseConnected"
+        style="display: none;"
+    >
+        <span class="connection-banner__text">Mất kết nối realtime — dữ liệu có thể không cập nhật.</span>
+        <button type="button" class="btn-refresh" @click="reconnectSSE()">Làm mới</button>
+    </div>
+
+    <div class="dashboard-grid">
     <template x-for="printer in printers" :key="printer.id">
         <div
             class="printer-card"
@@ -52,11 +78,18 @@
         >
             <div class="printer-card__header">
                 <span class="printer-card__name" x-text="printer.name"></span>
-                <span
-                    class="badge"
-                    :class="'badge--' + printer.canonical_status.toLowerCase()"
-                    x-text="printer.canonical_status"
-                ></span>
+                <span class="printer-card__badge-group">
+                    <span
+                        class="badge"
+                        :class="'badge--' + printer.canonical_status.toLowerCase()"
+                        x-text="printer.canonical_status"
+                    ></span>
+                    <span
+                        class="printer-card__stale-icon"
+                        x-show="!printer.realtime_connected"
+                        title="Dữ liệu cũ (mất kết nối realtime)"
+                    >⏱</span>
+                </span>
             </div>
 
             <div class="printer-card__temps" x-text="formatTemps(printer)"></div>
@@ -86,10 +119,15 @@
          nguồn `printers_json`), nên không bị hiển thị trùng lặp. -->
     <noscript>
         {% for printer in printers %}
-        <div class="printer-card">
+        <div class="printer-card{% if not printer.realtime_connected %} printer-card--stale{% endif %}">
             <div class="printer-card__header">
                 <span class="printer-card__name">{{ printer.name }}</span>
-                <span class="badge badge--{{ printer.canonical_status | lower }}">{{ printer.canonical_status }}</span>
+                <span class="printer-card__badge-group">
+                    <span class="badge badge--{{ printer.canonical_status | lower }}">{{ printer.canonical_status }}</span>
+                    {% if not printer.realtime_connected %}
+                    <span class="printer-card__stale-icon" title="Dữ liệu cũ (mất kết nối realtime)">⏱</span>
+                    {% endif %}
+                </span>
             </div>
             <div class="printer-card__temps">
                 {% if printer.extruder_temp is not none %}{{ printer.extruder_temp | round | int }}°C{% else %}—{% endif %}
@@ -118,6 +156,7 @@
         x-show="printers.length === 0"
         style="display: none;"
     >Chưa có máy in nào được đăng ký.</p>
+    </div>
 </div>
 {% endblock %}
 

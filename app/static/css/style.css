@@ -1,6 +1,6 @@
 /*
  * QIDI Print Farm Dashboard — style nền tảng (E6-1/C1) + grid card máy
- * in (E6-1/C2).
+ * in (E6-1/C2) + responsive/stale/fallback SSE (E6-1/C3).
  *
  * Nguồn duy nhất cho GIÁ TRỊ màu/typography: docs/UI-Style-Guide.md
  * (mục 1 bảng màu, mục 4 typography) — không tự đổi giá trị ở đây khi
@@ -8,13 +8,16 @@
  *
  * Phạm vi C1: biến CSS (custom properties) + layout khung top bar/nav
  * (style guide mục 2).
- * Phạm vi C2 (MỚI): `.dashboard-grid`/`.printer-card`/`.badge`/
- * `.progress-bar` (style guide mục 3) — layout grid hiện tại chỉ dùng
- * `auto-fill`/`minmax` để tự co giãn cơ bản theo bề rộng màn hình,
- * CHƯA phải 3 breakpoint cụ thể (≥1024px/640-1023px/<640px) mà style
- * guide mục 5 yêu cầu — để dành C3. `.printer-card--stale` (class gán
- * khi `realtime_connected=False`) hiện CHƯA có style riêng (làm mờ
- * card) — cũng để dành C3, cùng chunk xử lý mục 5.
+ * Phạm vi C2: `.dashboard-grid`/`.printer-card`/`.badge`/
+ * `.progress-bar` (style guide mục 3).
+ * Phạm vi C3 (MỚI, style guide mục 5): 3 breakpoint thật cho
+ * `.dashboard-grid` (mobile-first: <640px 1 cột -> 640-1023px 2 cột ->
+ * ≥1024px auto-fill/minmax cho 3-4 cột tuỳ độ rộng), style thật cho
+ * `.printer-card--stale` (giảm opacity, class đã gắn sẵn từ C2) +
+ * `.printer-card__stale-icon` (icon nhỏ khi `realtime_connected=False`,
+ * style guide mục 1), thu gọn top bar ở <640px, và
+ * `.connection-banner`/`.btn-refresh` (component "Nút hành động", style
+ * guide mục 3) cho fallback khi SSE mất kết nối.
  */
 
 :root {
@@ -129,14 +132,26 @@ body {
     color: var(--text-body);
 }
 
-/* Grid card máy in (UI-Style-Guide.md mục 3) — E6-1/C2.
-   Breakpoint đầy đủ (mục 5) để dành C3; `auto-fill`/`minmax` ở đây chỉ
-   là hành vi co giãn tự nhiên của CSS Grid, không phải 1 trong 3
-   breakpoint cụ thể của style guide. */
+/* Grid card máy in (UI-Style-Guide.md mục 3 + mục 5 responsive) —
+   mobile-first: mặc định (<640px) 1 cột full-width, từ 640px 2 cột,
+   từ 1024px auto-fill/minmax (tự nhiên ra 3-4 cột tuỳ độ rộng, đúng
+   mục 5 "3-4 card/hàng tuỳ độ rộng"). */
 .dashboard-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: 1fr;
     gap: 16px;
+}
+
+@media (min-width: 640px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (min-width: 1024px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    }
 }
 
 .dashboard-grid__empty {
@@ -151,10 +166,12 @@ body {
     padding: 16px;
 }
 
-/* Trạng thái mờ khi realtime_connected=False — style thật để dành C3
-   (docs/UI-Style-Guide.md mục 5), class đã gắn sẵn từ C2 để C3 chỉ
-   cần thêm rule CSS, không cần sửa lại template/JS. */
+/* Trạng thái mờ khi realtime_connected=False (UI-Style-Guide.md mục 1:
+   "toàn bộ badge nhạt màu hơn 30-40%" — áp dụng cho toàn card theo chỉ
+   định cụ thể ở "CHUNK KẾ TIẾP CẦN CHẠY" của State_E6-1_v4.md, không
+   chỉ riêng badge). opacity 0.65 = giảm 35%, nằm giữa khoảng 30-40%. */
 .printer-card--stale {
+    opacity: 0.65;
 }
 
 .printer-card__header {
@@ -162,6 +179,19 @@ body {
     align-items: center;
     justify-content: space-between;
     margin-bottom: 8px;
+}
+
+.printer-card__badge-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Icon nhỏ "stale" (UI-Style-Guide.md mục 1) — hiển thị cùng badge khi
+   realtime_connected=False, độc lập với opacity của card. */
+.printer-card__stale-icon {
+    font-size: var(--font-size-caption);
+    line-height: 1;
 }
 
 .printer-card__name {
@@ -254,4 +284,66 @@ body {
     color: var(--text-body);
     min-width: 32px;
     text-align: right;
+}
+
+/* Banner + nút refresh dự phòng khi SSE mất kết nối (E6-1/C3,
+   UI-Style-Guide.md mục 5). Chỉ dùng biến màu đã có — --status-paused
+   ("cần chú ý nhẹ") cho viền, --bg-page cho nền, tránh tự thêm hex
+   mới chưa có trong style guide. */
+.connection-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    margin-bottom: 16px;
+    border: 1px solid var(--status-paused);
+    border-left-width: 4px;
+    border-radius: 6px;
+    background-color: var(--bg-page);
+}
+
+.connection-banner__text {
+    font-size: var(--font-size-body);
+    color: var(--text-heading);
+}
+
+/* Nút hành động (UI-Style-Guide.md mục 3: bo góc 4-6px, gradient
+   --accent-primary, chữ trắng đậm, không viền). */
+.btn-refresh {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    background: linear-gradient(to bottom, var(--accent-primary), var(--accent-primary-to));
+    color: #ffffff;
+    font-weight: 700;
+    font-size: var(--font-size-body);
+    cursor: pointer;
+}
+
+.btn-refresh:hover {
+    filter: brightness(0.95);
+}
+
+/* Thu gọn top bar/nav ở <640px (UI-Style-Guide.md mục 5: "ẩn bớt link
+   phụ, không bắt buộc hamburger menu"). Đồng hồ hệ thống là phần phụ
+   nhất (không ảnh hưởng thao tác) nên ẩn trước; link tài khoản/đăng
+   xuất giữ lại vì vẫn cần dùng được. */
+@media (max-width: 639px) {
+    .top-bar {
+        padding: 0 12px;
+    }
+
+    .top-bar__clock {
+        display: none;
+    }
+
+    .main-nav {
+        padding: 0 12px;
+    }
+
+    .content {
+        padding: 16px 12px;
+    }
 }
