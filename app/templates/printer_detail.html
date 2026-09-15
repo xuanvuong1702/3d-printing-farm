@@ -177,32 +177,39 @@
         </div>
 
         <div x-show="tab === 'log'" style="display: none;">
-            <table class="kv-table">
-                <thead>
-                    <tr>
-                        <th>File</th>
-                        <th>Trạng thái</th>
-                        <th>Bắt đầu</th>
-                        <th>Kết thúc</th>
-                        <th>Ghi nhận lúc</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for entry in history %}
-                    <tr>
-                        <td>{{ entry.filename }}</td>
-                        <td><span class="badge badge--{{ entry.status }}">{{ entry.status }}</span></td>
-                        <td>{{ entry.start_time or "—" }}</td>
-                        <td>{{ entry.end_time or "—" }}</td>
-                        <td>{{ entry.created_at }}</td>
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="5">Chưa có lịch sử job nào cho máy này.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <!-- E6-4/C1: bảng 5 cột bị bóp chữ xuống dòng lộn xộn ở
+                 <640px (khác bảng Overview 2 cột, không cần wrapper) -
+                 bọc trong .table-scroll để scroll ngang thay vì vỡ
+                 layout, xem docs/State_E6-4_v1.md mục "Kết quả khảo
+                 sát tại C0" điểm 1. -->
+            <div class="table-scroll">
+                <table class="kv-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Trạng thái</th>
+                            <th>Bắt đầu</th>
+                            <th>Kết thúc</th>
+                            <th>Ghi nhận lúc</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in history %}
+                        <tr>
+                            <td>{{ entry.filename }}</td>
+                            <td><span class="badge badge--{{ entry.status }}">{{ entry.status }}</span></td>
+                            <td>{{ entry.start_time or "—" }}</td>
+                            <td>{{ entry.end_time or "—" }}</td>
+                            <td>{{ entry.created_at }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="5">Chưa có lịch sử job nào cho máy này.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <div x-show="tab === 'camera'" style="display: none;">

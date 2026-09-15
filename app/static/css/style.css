@@ -496,6 +496,20 @@ body {
     }
 }
 
+/* E6-4/C1: bảng Log (5 cột, `.kv-table` trong `.table-scroll`) scroll
+   ngang thay vì bóp chữ xuống dòng ở màn hẹp - chỉ áp dụng <640px,
+   không ảnh hưởng bảng Overview 2 cột (không có wrapper này) hay
+   layout desktop. */
+@media (max-width: 639px) {
+    .table-scroll {
+        overflow-x: auto;
+    }
+
+    .table-scroll .kv-table {
+        min-width: 480px;
+    }
+}
+
 /* Tab "Camera" (E6-3/C3) - khung ảnh cho MJPEG stream, viền đồng bộ
    --border đã có (không thêm biến CSS mới). */
 .camera-frame {
