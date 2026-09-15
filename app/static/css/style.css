@@ -39,7 +39,7 @@
 
     /* Bảng màu trạng thái máy in (map D-013, UI-Style-Guide.md mục 1) */
     --status-printing: var(--accent-primary-flat);
-    --status-idle: #3fa55e;
+    --status-idle: #8a9a8a;
     --status-paused: #e0a52e;
     --status-finished: #3fa55e;
     --status-stopped: #8a8a8a;
