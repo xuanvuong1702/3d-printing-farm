@@ -223,7 +223,116 @@ in thật kết nối trực tiếp.
 
 ---
 
-## 3. Ghi chú chung
+## 3. Hướng dẫn sử dụng hệ thống
+
+Phần này mô tả cách **vận hành hàng ngày** sau khi service đã chạy
+(xem mục 1/2 ở trên để cài đặt). Toàn bộ ví dụ dùng `localhost:8000`
+— khi dùng thật, thay bằng IP Raspberry Pi trong LAN.
+
+### 3.1. Dashboard (giao diện web)
+
+- **`GET /dashboard`** — trang chính, hiển thị grid card tất cả máy in
+  đã đăng ký: trạng thái realtime (IDLE/PRINTING/PAUSED/ERROR/OFFLINE),
+  % tiến độ, thời gian còn lại. Cập nhật tự động qua Server-Sent Events
+  (`/printers/realtime/stream`), không cần refresh trang.
+- **`GET /printers/{printer_id}/detail`** — trang chi tiết 1 máy: tab
+  Overview (trạng thái + tiến độ realtime), tab Log (lịch sử job đã in
+  trên máy đó), tab Camera (webcam stream nếu Moonraker có cấu hình).
+
+### 3.2. Đăng ký và quản lý máy in
+
+```bash
+# Thêm máy in mới (validate kết nối Moonraker ngay khi đăng ký)
+curl -X POST http://localhost:8000/printers \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Printer 1", "ip_address": "192.168.1.50"}'
+
+# Xem danh sách máy + trạng thái hiện tại
+curl http://localhost:8000/printers
+
+# Sửa tên/model/api_key (KHÔNG sửa được IP/port qua route này)
+curl -X PATCH http://localhost:8000/printers/1 \
+  -H "Content-Type: application/json" -d '{"name": "Printer 1 - Xưởng A"}'
+
+# Xoá máy (chặn nếu máy đang PRINTING/PAUSED hoặc còn job liên quan)
+curl -X DELETE http://localhost:8000/printers/1
+```
+
+### 3.3. Gửi lệnh in
+
+```bash
+# Upload G-code và in ngay trên 1 máy cụ thể
+curl -X POST http://localhost:8000/printers/1/print/start \
+  -F "file=@model.gcode"
+
+# Upload file lên máy nhưng chưa in ngay (vào hàng đợi/lưu trên máy)
+curl -X POST http://localhost:8000/printers/1/files -F "file=@model.gcode"
+
+# Tự động chọn máy "rảnh nhất" trong farm rồi in luôn — không cần biết
+# trước printer_id (hữu ích khi vận hành viên chỉ muốn "in cho xong")
+curl -X POST http://localhost:8000/printers/auto-assign/files \
+  -F "file=@model.gcode"
+
+# Điều khiển job đang chạy trên máy 1
+curl -X POST http://localhost:8000/printers/1/print/pause
+curl -X POST http://localhost:8000/printers/1/print/resume
+curl -X POST http://localhost:8000/printers/1/print/cancel
+
+# Sắp xếp lại thứ tự hàng đợi in của máy 1 (job_ids là hoán vị đầy đủ
+# các job đang ở trạng thái "queued" của máy đó)
+curl -X POST http://localhost:8000/printers/1/queue/reorder \
+  -H "Content-Type: application/json" -d '{"job_ids": [5, 3, 4]}'
+```
+
+### 3.4. An toàn, nguồn điện và xác nhận vận hành viên
+
+```bash
+# Emergency Stop — bắt buộc phải confirm=true, nếu không sẽ bị chặn (422)
+curl -X POST http://localhost:8000/printers/1/emergency_stop \
+  -H "Content-Type: application/json" -d '{"confirm": true}'
+
+# Bật/tắt nguồn máy in từ xa (chỉ hoạt động nếu máy có smart plug được
+# cấu hình qua Moonraker Power API — nếu không sẽ trả 409)
+curl -X POST http://localhost:8000/printers/1/power/on
+curl -X POST http://localhost:8000/printers/1/power/off
+
+# Sau khi job kết thúc (FINISHED/ERROR), máy bị "khoá" (is_held) chờ
+# vận hành viên kiểm tra thực tế rồi mới xác nhận gỡ khoá:
+curl -X POST http://localhost:8000/printers/1/confirm
+```
+
+### 3.5. Theo dõi realtime, báo cáo và vật liệu (spool)
+
+```bash
+# Trạng thái realtime của 1 máy / toàn bộ farm (poll một lần)
+curl http://localhost:8000/printers/1/realtime
+curl http://localhost:8000/printers/realtime
+
+# Stream realtime liên tục (Server-Sent Events) — dashboard web dùng
+# chính endpoint này để tự cập nhật
+curl -N http://localhost:8000/printers/realtime/stream
+
+# Lịch sử sự kiện/cảnh báo (lỗi, mất kết nối...) của farm
+curl http://localhost:8000/printers/events
+
+# Báo cáo tổng hợp: tổng giờ chạy, tỷ lệ lỗi, sản lượng — lọc theo máy
+# và/hoặc khoảng thời gian (ISO-8601, since/before đều optional)
+curl "http://localhost:8000/reports/summary?printer_id=1&since=2026-09-01T00:00:00Z"
+
+# Thông tin vật liệu (Spoolman) đã dùng cho job trên 1 máy cụ thể
+curl "http://localhost:8000/spools/3?printer_id=1"
+```
+
+### 3.6. Tài liệu API tự động
+
+FastAPI tự sinh Swagger UI tương tác tại `http://localhost:8000/docs`
+(và OpenAPI JSON tại `/openapi.json`) — liệt kê đầy đủ mọi route, kiểu
+dữ liệu request/response, và cho phép gọi thử trực tiếp trên trình
+duyệt mà không cần `curl`.
+
+---
+
+## 4. Ghi chú chung
 
 - Database là SQLite thuần (không ORM), nên **không cần** cài đặt
   server DB riêng (không Postgres/MySQL).
